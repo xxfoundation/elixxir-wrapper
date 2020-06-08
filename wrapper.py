@@ -133,7 +133,7 @@ def terminate_process(p):
                  format(pid, p.wait()))
 
 
-def backup_log(src_path, log_prefix, s3_bucket, region,
+def backup_log(src_path, idpath, s3_bucket, region,
                access_key_id, access_key_secret):
     """
     Uploads the log file at the given path to the given S3 destination.
@@ -142,8 +142,8 @@ def backup_log(src_path, log_prefix, s3_bucket, region,
 
     :param src_path: Path of file on S3 bucket
     :type src_path: str
-    :param log_prefix: Prefix for the unique identification of log files
-    :type log_prefix: str
+    :param idpath: Path to the node id which is used to get a unique prefix
+    :type idpath: str
     :param region: Region of S3 bucket
     :type region: str
     :param s3_bucket: Name of S3 bucket
@@ -163,7 +163,7 @@ def backup_log(src_path, log_prefix, s3_bucket, region,
     while True:
         # Sleep for ten seconds
         time.sleep(backup_frequency)
-
+        log_prefix = get_node_id(idpath)
         try:
             # Back up the log file
             upload(src_path, "{}-{}-{}".format(log_prefix, log_index, log_name),
@@ -191,7 +191,7 @@ def backup_log(src_path, log_prefix, s3_bucket, region,
 generated_uuid = None
 # read_node_id is a static cached node id when we successfully read it
 read_node_id = None
-def get_node_id(id_path, config_path):
+def get_node_id(id_path):
     """
     Obtain the ID of the running node.
 
@@ -208,7 +208,7 @@ def get_node_id(id_path, config_path):
     try:
         if os.path.exists(id_path):
             with open(id_path, 'r') as idfile:
-                node_id = idfile.read().trim()
+                node_id = json.loads(idfile.read().trim()).get("id", None)
                 if node_id:
                     read_node_id = node_id
                     return node_id
@@ -287,8 +287,8 @@ def get_args():
                         help="The path to store logs, e.g. /var/log/xxnet.log",
                         required=False)
     parser.add_argument("-i", "--idpath", type=str,
-                        default="/var/log/elixxir_id.txt",
-                        help="Node ID path, e.g. /var/log/xxnet/id.txt",
+                        default="/var/log/elixxir_id.json",
+                        help="Node ID path, e.g. /var/log/xxnet/id.json",
                         required=False)
     parser.add_argument("-b", "--binary", type=str,
                         help="Path to the binary",
@@ -310,6 +310,8 @@ def get_args():
                         help="s3 region")
     parser.add_argument("--tmpdir", type=str, required=False,
                         help="directory for temp files", default="/tmp")
+    parser.add_argument("--recoverederrpath", type=str, required=False,
+                        help="path to recovered error path", default=None)
 
     args = vars(parser.parse_args())
     return args
@@ -317,15 +319,15 @@ def get_args():
 
 # INITIALIZATION ---------------------------------------------------------------
 
-# Configure logger
-log_dir = "/cmix"
-log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
-                level=log.INFO, datefmt='%d-%b-%y %H:%M:%S',
-                filename='{}/wrapper.log'.format(log_dir), filemode='w')
-
 # Command line arguments
 args = get_args()
-log_path = args["logpath"]
+
+log_path = args.get("logpath", "/cmix")
+# Configure logger
+log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
+                level=log.INFO, datefmt='%d-%b-%y %H:%M:%S',
+                filename='{}/wrapper.log'.format(log_path), filemode='w')
+
 binary_path = args["binary"]
 management_directory = args["s3path"]
 
@@ -342,6 +344,13 @@ tmp_dir = "/tmp"
 remotes_paths = [version_file, command_file]
 cmdlogdir = "{}/cmdlog/".format(args["configdir"])
 recovered_err_path = "{}/recovered_error".format(args["configdir"])
+if args["recoverrederrpath"] is not None:
+    recovered_err_path = args["recoverrederrpath"]
+
+# Config file is the binaryname.yaml inside the config directory
+config_file = os.path.abspath(os.path.join(
+    args["config_dir"], os.path.basename(binary_path) + ".yaml"))
+
 
 # The valid "install" paths we can write to, with their local paths for
 # this machine
@@ -355,17 +364,18 @@ valid_paths = {
 # to avoid executing duplicate commands
 timestamps = [0, time.time()]
 
-# Record the instance id to uniquely identify log files
-instance_id = get_instance_id()
 
 # Globally keep track of the process being wrapped
 process = None
 
 # CONTROL FLOW -----------------------------------------------------------------
 
+# Note this is done before the thread split to guarantee the same uuid.
+node_id = get_node_id(args["idpath"])
+
 # Start the log backup service
 thr = threading.Thread(target=backup_log,
-                       args=(log_path, instance_id, s3_log_bucket_name,
+                       args=(log_path, args["idpath"], s3_log_bucket_name,
                              s3_bucket_region, s3_access_key_id,
                              s3_access_key_secret))
 thr.start()
@@ -383,7 +393,8 @@ while True:
         try:
             if not (process is None or process.poll() is not None):
                 process.terminate()
-            process = start_binary(binary_path, log_path, ["-i", "0"])
+            process = start_binary(binary_path, log_path,
+                                   ["--config", config_file])
         except IOError as err:
             log.error(err)
 
@@ -425,7 +436,7 @@ while True:
                 continue
 
             # Note: We get the UUID for every valid command in case it changes
-            node_id = get_node_id()
+            node_id = get_node_id(args["idpath"])
 
             # Execute the commands in sequence
             for command in signed_commands.get("commands", list()):
@@ -444,7 +455,7 @@ while True:
                     # If the process is not running, start it
                     if process is None or process.poll() is not None:
                         process = start_binary(binary_path, log_path,
-                                               ["-i", "0"])
+                                               ["--config", config_file])
 
                 elif command_type == "stop":
                     # Stop the wrapped process
