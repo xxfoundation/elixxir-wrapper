@@ -1,0 +1,16 @@
+[Unit]
+Description=Job that starts the Elixxir Wrapper service
+
+[Service]
+User=ubuntu
+Type=simple
+StartLimitInterval=5
+StartLimitBurst=10
+
+ExecStart=${wrapper_path} --logpath ${log_path} --binary ${binary_path} --s3path ${management_directory} --s3logbucket ${s3_log_bucket} --s3managementbucket ${s3_mgmt_bucket} --s3accesskey ${s3_access_key_id} --s3secret ${s3_access_key_secret} --s3region ${s3_region} --configdir ${config_dir}
+
+Restart=always
+RestartSec=120
+
+[Install]
+WantedBy=multi-user.target
