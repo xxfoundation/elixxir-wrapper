@@ -37,16 +37,18 @@ distinguished_name=req
 subjectAltName=DNS:%s
 """ % domain)
     os.chmod("cert.conf", 0o777)
+    f.close()
 
     # Form full subject string
+    os.mkdir("creds")
     subj = "/C=%s/ST=%s/L=%s/O=%s/OU=%s/CN=%s/emailAddress=%s" % \
            (country, state, locality, organization, organizational_unit, domain, email)
 
     node = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "730",
-            "-nodes", "-keyout", "node_key.key", "-out", "node_cert.crt",
+            "-nodes", "-keyout", "creds/node_key.key", "-out", "creds/node_cert.crt",
             "-subj", subj, "-extensions", "san", "-config", "cert.conf"]
     gate = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "730",
-            "-nodes", "-keyout", "gateway_key.key", "-out", "gateway_cert.crt",
+            "-nodes", "-keyout", "creds/gateway_key.key", "-out", "creds/gateway_cert.crt",
             "-subj", subj, "-extensions", "san", "-config", "cert.conf"]
     subprocess.run(node)
     print("~~~~~")
