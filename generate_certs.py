@@ -8,8 +8,8 @@ import subprocess
 
 def main():
     print("This script will ask you to input information to be used in key generation.")
-    print("If you do not wish to enter any given field, a default will be provided.")
-    country = input("Country (default: 'KY'): ")
+    print("If you do not wish to enter any given field, a default will be provided, attributed to the xx network.")
+    country = input("Country (default: 'KY (Caymen Islands)'): ")
     if country == "":
         country = 'KY'
     state = input("State/province (default: ''): ")
@@ -22,12 +22,12 @@ def main():
     organizational_unit = input("Organizational unit (default: 'nodes'): ")
     if organizational_unit == "":
         organizational_unit = "nodes"
-    email = input("Email (default: 'admin@elixxir.io'): ")
+    email = input("Email (default: 'admin@xx.network'): ")
     if email == "":
-        email = "admin@elixxir.io"
-    domain = input("Domain (default: 'www.google.com'): ")
+        email = "admin@xx.network"
+    domain = input("Domain (default: 'xx.network'): ")
     if domain == "":
-        domain = "www.google.com"
+        domain = "xx.network"
 
     # write config opts to file
     f = open("cert.conf", 'a')
