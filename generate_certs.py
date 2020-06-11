@@ -9,7 +9,7 @@ import subprocess
 def main():
     print("This script will ask you to input information to be used in key generation.")
     print("If you do not wish to enter any given field, a default will be provided, attributed to the xx network.")
-    country = input("Country (default: 'KY (Caymen Islands)'): ")
+    country = input("Country (default: 'KY (Cayman Islands)'): ")
     if country == "":
         country = 'KY'
     state = input("State/province (default: ''): ")
