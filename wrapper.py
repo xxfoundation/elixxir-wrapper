@@ -7,14 +7,12 @@ import base64
 import json
 import logging as log
 import os
-import random
 import stat
-import string
 import subprocess
 import shutil
+import sys
 import threading
 import time
-import urllib.request
 import uuid
 import boto3
 from OpenSSL import crypto
@@ -54,8 +52,8 @@ def upload(src_path, dst_path, s3_bucket, region,
         log.debug("Successfully uploaded to {}/{} from {}".format(s3_bucket,
                                                                   dst_path,
                                                                   src_path))
-    except Exception as e:
-        log.error("Unable to upload {} to S3: {}".format(src_path, e),
+    except Exception as error:
+        log.error("Unable to upload {} to S3: {}".format(src_path, error),
                   exc_info=True)
 
 
@@ -89,12 +87,12 @@ def download(src_path, dst_path, s3_bucket, region,
         log.debug("Successfully downloaded to {} from {}/{}".format(dst_path,
                                                                     s3_bucket,
                                                                     src_path))
-    except Exception as e:
-        log.error("Unable to download {} from S3: {}".format(src_path, e),
+    except Exception as error:
+        log.error("Unable to download {} from S3: {}".format(src_path, error),
                   exc_info=True)
 
 
-def start_binary(bin_path, log_file, args):
+def start_binary(bin_path, log_file, bin_args):
     """
     Starts the binary at the given path with the given args.
     Returns the newly-created subprocess.
@@ -103,13 +101,13 @@ def start_binary(bin_path, log_file, args):
     :type bin_path: str
     :param log_file: Path to the binary log file
     :type log_file: str
-    :param args: Arguments for the binary
-    :type args: list[str]
+    :param bin_args: Arguments for the binary
+    :type bin_args: list[str]
     :return: Newly-created subprocess
     :rtype: subprocess.Popen
     """
     with open(log_file, "a") as err_out:
-        p = subprocess.Popen([bin_path] + args,
+        p = subprocess.Popen([bin_path] + bin_args,
                              stdout=subprocess.DEVNULL,
                              stderr=err_out)
         log.info(bin_path + " started at PID " + str(p.pid))
@@ -133,17 +131,17 @@ def terminate_process(p):
                  format(pid, p.wait()))
 
 
-def backup_log(src_path, idpath, s3_bucket, region,
+def backup_log(src_path, id_path, s3_bucket, region,
                access_key_id, access_key_secret):
     """
     Uploads the log file at the given path to the given S3 destination.
     Clears local log file after a certain size threshold.
     Run in a separate thread.
 
-    :param src_path: Path of file on S3 bucket
+    :param src_path: Path of the local file
     :type src_path: str
-    :param idpath: Path to the node id which is used to get a unique prefix
-    :type idpath: str
+    :param id_path: Path to the node id which is used to get a unique prefix
+    :type id_path: str
     :param region: Region of S3 bucket
     :type region: str
     :param s3_bucket: Name of S3 bucket
@@ -163,7 +161,7 @@ def backup_log(src_path, idpath, s3_bucket, region,
     while True:
         # Sleep for ten seconds
         time.sleep(backup_frequency)
-        log_prefix = get_node_id(idpath)
+        log_prefix = get_node_id(id_path)
         try:
             # Back up the log file
             upload(src_path, "{}-{}-{}".format(log_prefix, log_index, log_name),
@@ -183,14 +181,17 @@ def backup_log(src_path, idpath, s3_bucket, region,
                 log.info("Log has been cleared. New Size: {}".format(
                     os.path.getsize(src_path)))
 
-        except Exception as e:
-            log.error("Unable to back up log file: {}".format(e), exc_info=True)
+        except Exception as error:
+            log.error("Unable to back up log file: {}".format(error),
+                      exc_info=True)
 
 
 # generated_uuid is a static cached UUID used as the node_id
 generated_uuid = None
 # read_node_id is a static cached node id when we successfully read it
 read_node_id = None
+
+
 def get_node_id(id_path):
     """
     Obtain the ID of the running node.
@@ -208,19 +209,18 @@ def get_node_id(id_path):
     try:
         if os.path.exists(id_path):
             with open(id_path, 'r') as idfile:
-                node_id = json.loads(idfile.read().trim()).get("id", None)
-                if node_id:
-                    read_node_id = node_id
-                    return node_id
-    except Exception:
-        log.warning("Could not open node ID: {}".format(id_path))
+                new_node_id = json.loads(idfile.read().strip()).get("id", None)
+                if new_node_id:
+                    read_node_id = new_node_id
+                    return new_node_id
+    except Exception as error:
+        log.warning("Could not open node ID at {}: {}".format(id_path, error))
 
     # If that fails, then generate, or use the last generated UUID
     if not generated_uuid:
         generated_uuid = str(uuid.uuid1())
-    node_id = generated_uuid
-    log.warning("Generating random instance ID: {}".format(node_id))
-    return node_id
+        log.warning("Generating random instance ID: {}".format(generated_uuid))
+    return generated_uuid
 
 
 def verify_cmd(inbuf, public_key_path):
@@ -245,34 +245,36 @@ def verify_cmd(inbuf, public_key_path):
             signature = base64.b64decode(sig_json.get('signature'))
             crypto.verify(key, signature, bytes(command, 'utf-8'), 'sha256')
             return command_json, True
-        except Exception as e:
-            err(str(e))
+        except Exception as error:
+            log.error("Unable to verify command: {}".format(error))
             return command_json, False
 
-def save_cmd(filepath, destdir, valid, cmdtime):
+
+def save_cmd(file_path, dest_dir, valid, cmd_time):
     """
     save_cmd saves the command json files to a log directory
 
-    :param filepath: The source path of the command to save
-    :type filepath: str
-    :param destdir: the destination directory
-    :type destdir: str
+    :param file_path: The source path of the command to save
+    :type file_path: str
+    :param dest_dir: the destination directory
+    :type dest_dir: str
     :param valid: is this a valid command file
     :type valid: bool
-    :param cmdtime: the timestamp of the command
-    :type cmdtime: timestamp
+    :param cmd_time: the timestamp of the command
+    :type cmd_time: timestamp
     :return: Nothing
     :rtype: None
     """
-    if not os.path.exists(destdir):
-        os.makedirs(destdir)
+    if not os.path.exists(dest_dir):
+        os.makedirs(dest_dir)
 
-    fparts = os.path.basename(filepath).split('.')
+    fparts = os.path.basename(file_path).split('.')
     if not valid:
         fparts[0] = "INVALID_{}".format(fparts[0])
-    #destdir/command_2849204.json
-    dst = "{}/{}_{}.{}".format(destdir, fparts[0], int(cmdtime), fparts[1])
-    shutil.copyfile(filepath, dst)
+    # destdir/command_2849204.json
+    dest = "{}/{}_{}.{}".format(dest_dir, fparts[0], int(cmd_time), fparts[1])
+    shutil.copyfile(file_path, dest)
+
 
 def get_args():
     """
@@ -310,11 +312,10 @@ def get_args():
                         help="s3 region")
     parser.add_argument("--tmpdir", type=str, required=False,
                         help="directory for temp files", default="/tmp")
-    parser.add_argument("--recoverederrpath", type=str, required=False,
-                        help="path to recovered error path", default=None)
+    parser.add_argument("--erroutputpath", type=str, required=False,
+                        help="Path to recovered error path", default=None)
 
-    args = vars(parser.parse_args())
-    return args
+    return vars(parser.parse_args())
 
 
 # INITIALIZATION ---------------------------------------------------------------
@@ -322,42 +323,41 @@ def get_args():
 # Command line arguments
 args = get_args()
 
-log_path = args.get("logpath", "/cmix")
 # Configure logger
 log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
-                level=log.INFO, datefmt='%d-%b-%y %H:%M:%S',
-                filename='{}/wrapper.log'.format(log_path), filemode='w')
+                level=log.INFO, datefmt='%d-%b-%y %H:%M:%S')
 
 binary_path = args["binary"]
 management_directory = args["s3path"]
 
 # Hardcoded variables
-rsa_certificate_path = "{}/network_management.crt".format(args["configdir"])
+rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
+                                                       "network_management.crt"))
 s3_log_bucket_name = args["s3logbucket"]
 s3_management_bucket_name = args["s3managementbucket"]
 s3_access_key_id = args["s3accesskey"]
 s3_access_key_secret = args["s3secret"]
 s3_bucket_region = args["s3region"]
+log_path = args["logpath"]
+err_output_path = args["erroutputpath"]
 version_file = management_directory + "/version.jsonl"
 command_file = management_directory + "/command.jsonl"
 tmp_dir = "/tmp"
 remotes_paths = [version_file, command_file]
-cmdlogdir = "{}/cmdlog/".format(args["configdir"])
-recovered_err_path = "{}/recovered_error".format(args["configdir"])
-if args["recoverrederrpath"] is not None:
-    recovered_err_path = args["recoverrederrpath"]
+cmd_log_dir = os.path.expanduser(os.path.join(args["configdir"], "cmdlog"))
 
 # Config file is the binaryname.yaml inside the config directory
-config_file = os.path.abspath(os.path.join(
-    args["config_dir"], os.path.basename(binary_path) + ".yaml"))
+config_file = os.path.expanduser(os.path.join(
+    args["configdir"], os.path.basename(binary_path) + ".yaml"))
 
 
 # The valid "install" paths we can write to, with their local paths for
 # this machine
 valid_paths = {
-    "[log]": os.path.dirname(os.path.abspath(log_path)),
-    "[bin]": os.path.dirname(os.path.abspath(binary_path)),
-    "[config]": os.path.abspath(args["configdir"])
+    "binary": os.path.abspath(os.path.expanduser(binary_path)),
+    "wrapper": os.path.abspath(sys.argv[0]),
+    "config": config_file,
+    "cert": rsa_certificate_path
 }
 
 # Record the most recent command timestamp
@@ -375,9 +375,9 @@ node_id = get_node_id(args["idpath"])
 
 # Start the log backup service
 thr = threading.Thread(target=backup_log,
-                       args=(log_path, args["idpath"], s3_log_bucket_name,
-                             s3_bucket_region, s3_access_key_id,
-                             s3_access_key_secret))
+                       args=(log_path, args["idpath"],
+                             s3_log_bucket_name, s3_bucket_region,
+                             s3_access_key_id, s3_access_key_secret))
 thr.start()
 
 # Frequency (in seconds) of checking for new commands
@@ -389,7 +389,7 @@ while True:
     time.sleep(command_frequency)
 
     # If there is a recovered error file present, restart the server
-    if os.path.isfile(recovered_err_path):
+    if err_output_path and os.path.isfile(err_output_path):
         try:
             if not (process is None or process.poll() is not None):
                 process.terminate()
@@ -407,25 +407,22 @@ while True:
                      s3_access_key_id, s3_access_key_secret)
 
             # Load the management instructions into JSON
-            signed_commands = None
-            ok = False
             with open(local_path, 'r') as cmd_file:
                 signed_commands, ok = verify_cmd(cmd_file, rsa_certificate_path)
+                if signed_commands is None:
+                    log.error("Empty command file: {}".format(local_path))
+                    save_cmd(local_path, cmd_log_dir, False, time.time())
+                    continue
 
-            if signed_commands is None:
-                log.error("Empty command file: {}".format(local_path))
-                save_cmd(local_path, cmdlogdir, False, time.time())
-                continue
-
-            if not ok:
-                log.error("Failed to verify signature for {}!".format(
-                        local_path), exc_info=True)
-                save_cmd(local_path, cmdlogdir, ok, time.time())
-                continue
+                if not ok:
+                    log.error("Failed to verify signature for {}!".format(
+                            local_path), exc_info=True)
+                    save_cmd(local_path, cmd_log_dir, ok, time.time())
+                    continue
 
             timestamp = signed_commands.get("timestamp", 0)
             # Save the command into a log
-            save_cmd(local_path, cmdlogdir, ok, timestamp)
+            save_cmd(local_path, cmd_log_dir, ok, timestamp)
 
             # If the commands occurred before the script, skip
             # Note: We do not update unless we get a command we
@@ -442,7 +439,8 @@ while True:
             for command in signed_commands.get("commands", list()):
                 # If the command does not apply to us, note that and move on
                 if "nodes" in command:
-                    if node_id not in command.get("nodes", list()):
+                    node_targets = command.get("nodes", list())
+                    if node_targets and node_id not in node_targets:
                         log.info("Command does not apply to {}".format(node_id))
                         timestamps[i] = timestamp
                         continue
@@ -476,14 +474,12 @@ while True:
 
                     # Verify valid install path
                     install_path = info.get("install_path", "")
-                    for src, dst in valid_paths:
-                        install_path.replace(src, dst, 1)
-                    install_path = os.path.abspath(install_path)
-                    if install_path.split('/')[0] not in valid_paths.values():
-                        log.error("Invalid install path: {}".format(
-                            install_path))
+                    if install_path not in valid_paths.keys():
+                        log.error("Invalid install path: {}. Expected one of: {}".format(
+                            install_path, valid_paths.values()))
                         timestamps[i] = timestamp
                         continue
+                    install_path = valid_paths[install_path]
 
                     # Update the local binary with the remote binary
                     update_path = "{}/{}".format(management_directory,
@@ -495,8 +491,9 @@ while True:
                     download(update_path, tmp_path,
                              s3_management_bucket_name, s3_bucket_region,
                              s3_access_key_id, s3_access_key_secret)
+
                     # If the hash matches, overwrite to binary_path
-                    update_bytes = bytes(open(tmp_path, 'r').read(), 'utf-8')
+                    update_bytes = bytes(open(tmp_path, 'rb').read())
                     actual_hash = hashlib.sha256(update_bytes).hexdigest()
                     expected_hash = info.get("sha256sum", "")
                     if actual_hash != expected_hash:
@@ -509,9 +506,9 @@ while True:
                     # that's there.
                     try:
                         os.replace(tmp_path, install_path)
-                    except Exception as e:
-                        log.error("Could not overwrite {} with {}".format(
-                            binary_path, tmp_path))
+                    except Exception as err:
+                        log.error("Could not overwrite {} with {}: {}".format(
+                            binary_path, tmp_path, err))
                         timestamps[i] = timestamp
                         continue
                     # Make the binary executable
