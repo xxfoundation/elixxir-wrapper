@@ -314,7 +314,8 @@ def get_args():
                         help="directory for temp files", default="/tmp")
     parser.add_argument("--erroutputpath", type=str, required=False,
                         help="Path to recovered error path", default=None)
-
+    parser.add_argument("--configoverride", type=str, required=False,
+                        help="Override for config file path", default="")
     return vars(parser.parse_args())
 
 
@@ -322,6 +323,7 @@ def get_args():
 
 # Command line arguments
 args = get_args()
+print(args)
 
 # Configure logger
 log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
@@ -349,7 +351,7 @@ cmd_log_dir = os.path.expanduser(os.path.join(args["configdir"], "cmdlog"))
 # Config file is the binaryname.yaml inside the config directory
 config_file = os.path.expanduser(os.path.join(
     args["configdir"], os.path.basename(binary_path) + ".yaml"))
-
+config_override = os.path.abspath(args["configoverride"])
 
 # The valid "install" paths we can write to, with their local paths for
 # this machine
@@ -393,8 +395,15 @@ while True:
         try:
             if not (process is None or process.poll() is not None):
                 process.terminate()
-            process = start_binary(binary_path, log_path,
+
+            if os.path.exists(config_override):
+                process = start_binary(binary_path, log_path,
+                                       ["--config", config_override])
+            elif os.path.exists(config_file):
+                process = start_binary(binary_path, log_path,
                                    ["--config", config_file])
+            else:
+                process = start_binary(binary_path, log_path, [])
         except IOError as err:
             log.error(err)
 
