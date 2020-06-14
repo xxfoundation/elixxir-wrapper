@@ -18,6 +18,7 @@ import boto3
 from OpenSSL import crypto
 import hashlib
 
+
 # FUNCTIONS --------------------------------------------------------------------
 
 
@@ -107,6 +108,8 @@ def start_binary(bin_path, log_file, bin_args):
     :rtype: subprocess.Popen
     """
     with open(log_file, "a") as err_out:
+        log.info("RUNNING COMMAND WITH ARGS:")
+        log.info(", ".join([bin_path] + bin_args))
         p = subprocess.Popen([bin_path] + bin_args,
                              stdout=subprocess.DEVNULL,
                              stderr=err_out)
@@ -333,8 +336,12 @@ binary_path = args["binary"]
 management_directory = args["s3path"]
 
 # Hardcoded variables
-rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
+rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"], "creds",
                                                        "network_management.crt"))
+if not os.path.exists(rsa_certificate_path):  # check creds dir for file as well
+    rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
+                                                           "network_management.crt"))
+
 s3_log_bucket_name = args["s3logbucket"]
 s3_management_bucket_name = args["s3managementbucket"]
 s3_access_key_id = args["s3accesskey"]
@@ -366,7 +373,6 @@ valid_paths = {
 # to avoid executing duplicate commands
 timestamps = [0, time.time()]
 
-
 # Globally keep track of the process being wrapped
 process = None
 
@@ -396,12 +402,12 @@ while True:
             if not (process is None or process.poll() is not None):
                 process.terminate()
 
-            if os.path.exists(config_override):
+            if os.path.isfile(config_override):
                 process = start_binary(binary_path, log_path,
                                        ["--config", config_override])
-            elif os.path.exists(config_file):
+            elif os.path.isfile(config_file):
                 process = start_binary(binary_path, log_path,
-                                   ["--config", config_file])
+                                       ["--config", config_file])
             else:
                 process = start_binary(binary_path, log_path, [])
         except IOError as err:
@@ -425,7 +431,7 @@ while True:
 
                 if not ok:
                     log.error("Failed to verify signature for {}!".format(
-                            local_path), exc_info=True)
+                        local_path), exc_info=True)
                     save_cmd(local_path, cmd_log_dir, ok, time.time())
                     continue
 
@@ -461,8 +467,14 @@ while True:
                 if command_type == "start":
                     # If the process is not running, start it
                     if process is None or process.poll() is not None:
-                        process = start_binary(binary_path, log_path,
-                                               ["--config", config_file])
+                        if os.path.isfile(config_override):
+                            process = start_binary(binary_path, log_path,
+                                                   ["--config", config_override])
+                        elif os.path.isfile(config_file):
+                            process = start_binary(binary_path, log_path,
+                                                   ["--config", config_file])
+                        else:
+                            process = start_binary(binary_path, log_path, [])
 
                 elif command_type == "stop":
                     # Stop the wrapped process
