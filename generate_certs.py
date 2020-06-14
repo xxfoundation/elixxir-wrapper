@@ -40,7 +40,8 @@ subjectAltName=DNS:%s
     f.close()
 
     # Form full subject string
-    os.mkdir("creds")
+    if not os.path.exists('creds'):
+        os.mkdir("creds")
     subj = "/C=%s/ST=%s/L=%s/O=%s/OU=%s/CN=%s/emailAddress=%s" % \
            (country, state, locality, organization, organizational_unit, domain, email)
 
