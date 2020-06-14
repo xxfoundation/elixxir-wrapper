@@ -288,19 +288,19 @@ def get_args():
     parser.add_argument("-d", "--disableupdates", action="store_true",
                         help="Disable automatic updates",
                         default=False, required=False)
-    parser.add_argument("-l", "--logpath", type=str, default="/var/log/elixxir",
-                        help="The path to store logs, e.g. /var/log/xxnet.log",
+    parser.add_argument("-l", "--logpath", type=str, default="/opt/xxnetwork/logs/xx.log",
+                        help="The path to store logs, e.g. /opt/xxnetwork/node-logs/node.log",
                         required=False)
     parser.add_argument("-i", "--idpath", type=str,
-                        default="/var/log/elixxir_id.json",
-                        help="Node ID path, e.g. /var/log/xxnet/id.json",
+                        default="/opt/xxnetwork/logs/IDF.json",
+                        help="Node ID path, e.g. /opt/xxnetwork/logs/nodeIDF.json",
                         required=False)
     parser.add_argument("-b", "--binary", type=str,
                         help="Path to the binary",
                         required=True)
     parser.add_argument("-c", "--configdir", type=str, required=False,
-                        help="Path to the config dir, e.g., ~/.xxnet/",
-                        default=os.path.expanduser("~/.elixxir"))
+                        help="Path to the config dir, e.g., ~/.xxnetwork/",
+                        default=os.path.expanduser("~/.xxnetwork"))
     parser.add_argument("-s", "--s3path", type=str, required=True,
                         help="Path to the s3 management directory")
     parser.add_argument("-m", "--s3managementbucket", type=str,
