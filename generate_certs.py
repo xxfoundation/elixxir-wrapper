@@ -12,7 +12,9 @@ def main():
     country = input("Country (default: 'KY (Caymen Islands)'): ")
     if country == "":
         country = 'KY'
-    state = input("State/province (default: ''): ")
+    state = input("State/province (default: ' '): ")
+    if state == "":
+        state = " "
     locality = input("Locality (default: 'George Town'): ")
     if locality == "":
         locality = "George Town"
