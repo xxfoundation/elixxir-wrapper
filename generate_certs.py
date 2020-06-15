@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 
+#///////////////////////////////////////////////////////////////////////////////
+#// Copyright © 2020 xx network SEZC                                          //
+#//                                                                           //
+#// Use of this source code is governed by a license that can be found in the //
+#// LICENSE file                                                              //
+#///////////////////////////////////////////////////////////////////////////////
+
+
 # This file is an interactive script to generate certificates for both gateway and node
 
 import os
