@@ -12,7 +12,9 @@ def main():
     country = input("Country (default: 'KY (Caymen Islands)'): ")
     if country == "":
         country = 'KY'
-    state = input("State/province (default: ''): ")
+    state = input("State/province (default: ' '): ")
+    if state == "":
+        state = " "
     locality = input("Locality (default: 'George Town'): ")
     if locality == "":
         locality = "George Town"
@@ -40,7 +42,8 @@ subjectAltName=DNS:%s
     f.close()
 
     # Form full subject string
-    os.mkdir("creds")
+    if not os.path.exists('creds'):
+        os.mkdir("creds")
     subj = "/C=%s/ST=%s/L=%s/O=%s/OU=%s/CN=%s/emailAddress=%s" % \
            (country, state, locality, organization, organizational_unit, domain, email)
 
