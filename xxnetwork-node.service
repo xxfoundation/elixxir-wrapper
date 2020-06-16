@@ -1,0 +1,16 @@
+[Unit]
+Description=Job that starts the xx network Node service
+
+[Service]
+User=root
+Type=simple
+StartLimitInterval=5
+StartLimitBurst=10
+
+ExecStart=/bin/bash -c '/opt/xxnetwork/xxnetwork-wrapper.py --logpath /opt/xxnetwork/node-logs/node.log --binary /opt/xxnetwork/bin/xxnetwork-node --s3path server --s3logbucket alphanet-logs-default --s3managementbucket alphanet-management-default --s3accesskey AKIAT3MRRAOJFIIU2ZPE --s3secret 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 --s3region us-west-1 --configdir /opt/xxnetwork/ --erroutputpath /opt/xxnetwork/node-logs/node-err.log >> /opt/xxnetwork/node-logs/xxnetwork-wrapper.log 2>&1'
+
+Restart=always
+RestartSec=120
+
+[Install]
+WantedBy=multi-user.target
