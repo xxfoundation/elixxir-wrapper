@@ -7,7 +7,7 @@ StartLimitBurst=10
 User=ubuntu
 Type=simple
 
-ExecStart=/bin/bash -c '/opt/xxnetwork/xxnetwork-wrapper.py --logpath /opt/xxnetwork/node-logs/node.log --binary /opt/xxnetwork/bin/xxnetwork-node --s3path node --s3logbucket alphanet-logs-prod --s3managementbucket alphanet-management-prod --s3accesskey ${s3_access_key_id} --s3secret ${s3_access_key_secret} --s3region us-west-1 --configdir /opt/xxnetwork/ --erroutputpath /opt/xxnetwork/node-logs/node-err.log --idpath /opt/xxnetwork/node-logs/nodeIDF.json >> ${wrapper_log_path} 2>&1'
+ExecStart=/bin/bash -c '/opt/xxnetwork/xxnetwork-wrapper.py --logpath /opt/xxnetwork/node-logs/node.log --binary /opt/xxnetwork/bin/xxnetwork-node --s3path server --s3logbucket alphanet-logs-prod --s3managementbucket alphanet-management-prod --s3accesskey ${s3_access_key_id} --s3secret ${s3_access_key_secret} --s3region us-west-1 --configdir /opt/xxnetwork/ --erroutputpath /opt/xxnetwork/node-logs/node-err.log --idpath /opt/xxnetwork/node-logs/nodeIDF.json >> ${wrapper_log_path} 2>&1'
 Restart=always
 RestartSec=120
 
