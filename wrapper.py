@@ -371,8 +371,6 @@ config_override = os.path.abspath(args["configoverride"])
 
 if os.path.isfile(config_override):
     config_file = config_override
-elif not os.path.isfile(config_file):
-    config_file = ""
 
 # The valid "install" paths we can write to, with their local paths for
 # this machine
@@ -416,11 +414,11 @@ while True:
             if not (process is None or process.poll() is not None):
                 process.terminate()
 
-            if config_file == "":
-                process = start_binary(binary_path, log_path, [])
-            else:
+            if os.path.isfile(config_file):
                 process = start_binary(binary_path, log_path,
                                        ["--config", config_file])
+            else:
+                process = start_binary(binary_path, log_path, [])
         except IOError as err:
             log.error(err)
 
@@ -478,11 +476,11 @@ while True:
                 if command_type == "start":
                     # If the process is not running, start it
                     if process is None or process.poll() is not None:
-                        if config_file == "":
-                            process = start_binary(binary_path, log_path, [])
-                        else:
+                        if os.path.isfile(config_file):
                             process = start_binary(binary_path, log_path,
                                        ["--config", config_file])
+                        else:
+                            process = start_binary(binary_path, log_path, [])
 
                 elif command_type == "stop":
                     # Stop the wrapped process
