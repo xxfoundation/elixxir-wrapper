@@ -346,6 +346,8 @@ s3_access_key_id = args["s3accesskey"]
 s3_access_key_secret = args["s3secret"]
 s3_bucket_region = args["s3region"]
 log_path = args["logpath"]
+os.makedirs(os.path.dirname(args["logpath"]), exist_ok=True)
+
 err_output_path = args["erroutputpath"]
 version_file = management_directory + "/version.jsonl"
 command_file = management_directory + "/command.jsonl"
