@@ -25,6 +25,7 @@ import boto3
 from OpenSSL import crypto
 import hashlib
 
+
 # FUNCTIONS --------------------------------------------------------------------
 
 
@@ -114,6 +115,8 @@ def start_binary(bin_path, log_file, bin_args):
     :rtype: subprocess.Popen
     """
     with open(log_file, "a") as err_out:
+        log.info("RUNNING COMMAND WITH ARGS:")
+        log.info(", ".join([bin_path] + bin_args))
         p = subprocess.Popen([bin_path] + bin_args,
                              stdout=subprocess.DEVNULL,
                              stderr=err_out)
@@ -292,19 +295,19 @@ def get_args():
     parser.add_argument("-d", "--disableupdates", action="store_true",
                         help="Disable automatic updates",
                         default=False, required=False)
-    parser.add_argument("-l", "--logpath", type=str, default="/var/log/elixxir",
-                        help="The path to store logs, e.g. /var/log/xxnet.log",
+    parser.add_argument("-l", "--logpath", type=str, default="/opt/xxnetwork/logs/xx.log",
+                        help="The path to store logs, e.g. /opt/xxnetwork/node-logs/node.log",
                         required=False)
     parser.add_argument("-i", "--idpath", type=str,
-                        default="/var/log/elixxir_id.json",
-                        help="Node ID path, e.g. /var/log/xxnet/id.json",
+                        default="/opt/xxnetwork/logs/IDF.json",
+                        help="Node ID path, e.g. /opt/xxnetwork/logs/nodeIDF.json",
                         required=False)
     parser.add_argument("-b", "--binary", type=str,
                         help="Path to the binary",
                         required=True)
     parser.add_argument("-c", "--configdir", type=str, required=False,
-                        help="Path to the config dir, e.g., ~/.xxnet/",
-                        default=os.path.expanduser("~/.elixxir"))
+                        help="Path to the config dir, e.g., ~/.xxnetwork/",
+                        default=os.path.expanduser("~/.xxnetwork"))
     parser.add_argument("-s", "--s3path", type=str, required=True,
                         help="Path to the s3 management directory")
     parser.add_argument("-m", "--s3managementbucket", type=str,
@@ -321,7 +324,8 @@ def get_args():
                         help="directory for temp files", default="/tmp")
     parser.add_argument("--erroutputpath", type=str, required=False,
                         help="Path to recovered error path", default=None)
-
+    parser.add_argument("--configoverride", type=str, required=False,
+                        help="Override for config file path", default="")
     return vars(parser.parse_args())
 
 
@@ -329,6 +333,7 @@ def get_args():
 
 # Command line arguments
 args = get_args()
+print(args)
 
 # Configure logger
 log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
@@ -338,8 +343,12 @@ binary_path = args["binary"]
 management_directory = args["s3path"]
 
 # Hardcoded variables
-rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
+rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"], "creds",
                                                        "network_management.crt"))
+if not os.path.exists(rsa_certificate_path):  # check creds dir for file as well
+    rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
+                                                           "network_management.crt"))
+
 s3_log_bucket_name = args["s3logbucket"]
 s3_management_bucket_name = args["s3managementbucket"]
 s3_access_key_id = args["s3accesskey"]
@@ -358,7 +367,10 @@ cmd_log_dir = os.path.expanduser(os.path.join(args["configdir"], "cmdlog"))
 # Config file is the binaryname.yaml inside the config directory
 config_file = os.path.expanduser(os.path.join(
     args["configdir"], os.path.basename(binary_path) + ".yaml"))
+config_override = os.path.abspath(args["configoverride"])
 
+if os.path.isfile(config_override):
+    config_file = config_override
 
 # The valid "install" paths we can write to, with their local paths for
 # this machine
@@ -372,7 +384,6 @@ valid_paths = {
 # Record the most recent command timestamp
 # to avoid executing duplicate commands
 timestamps = [0, time.time()]
-
 
 # Globally keep track of the process being wrapped
 process = None
@@ -402,8 +413,12 @@ while True:
         try:
             if not (process is None or process.poll() is not None):
                 process.terminate()
-            process = start_binary(binary_path, log_path,
-                                   ["--config", config_file])
+
+            if os.path.isfile(config_file):
+                process = start_binary(binary_path, log_path,
+                                       ["--config", config_file])
+            else:
+                process = start_binary(binary_path, log_path, [])
         except IOError as err:
             log.error(err)
 
@@ -425,7 +440,7 @@ while True:
 
                 if not ok:
                     log.error("Failed to verify signature for {}!".format(
-                            local_path), exc_info=True)
+                        local_path), exc_info=True)
                     save_cmd(local_path, cmd_log_dir, ok, time.time())
                     continue
 
@@ -461,8 +476,11 @@ while True:
                 if command_type == "start":
                     # If the process is not running, start it
                     if process is None or process.poll() is not None:
-                        process = start_binary(binary_path, log_path,
-                                               ["--config", config_file])
+                        if os.path.isfile(config_file):
+                            process = start_binary(binary_path, log_path,
+                                       ["--config", config_file])
+                        else:
+                            process = start_binary(binary_path, log_path, [])
 
                 elif command_type == "stop":
                     # Stop the wrapped process
