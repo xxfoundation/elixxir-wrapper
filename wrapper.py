@@ -539,7 +539,7 @@ while True:
                         continue
 
                     # Handle binary install
-                    if install_path == valid_paths["binary:"]:
+                    if install_path == valid_paths["binary"]:
                         os.chmod(install_path, stat.S_IEXEC)
 
                     # Handle Wrapper install
