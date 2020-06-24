@@ -539,6 +539,10 @@ while True:
                         continue
                     # Make the binary executable
                     os.chmod(binary_path, stat.S_IEXEC)
+
+                    if install_path == "wrapper":
+                        log.info("Wrapper script updated, exiting now...")
+                        sys.exit(0)
                 log.info("Completed command: {}".format(command))
 
             # Update the timestamp in order to avoid repetition
