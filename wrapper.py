@@ -537,8 +537,16 @@ while True:
                             binary_path, tmp_path, err))
                         timestamps[i] = timestamp
                         continue
-                    # Make the binary executable
-                    os.chmod(binary_path, stat.S_IEXEC)
+
+                    # Handle binary install
+                    if install_path == valid_paths["binary:"]:
+                        os.chmod(install_path, stat.S_IEXEC)
+
+                    # Handle Wrapper install
+                    if install_path == valid_paths["wrapper"]:
+                        os.chmod(install_path, stat.S_IEXEC)
+                        log.info("Wrapper script updated, exiting now...")
+                        sys.exit(0)
                 log.info("Completed command: {}".format(command))
 
             # Update the timestamp in order to avoid repetition
