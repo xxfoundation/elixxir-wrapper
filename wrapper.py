@@ -115,8 +115,6 @@ def start_binary(bin_path, log_file, bin_args):
     :rtype: subprocess.Popen
     """
     with open(log_file, "a") as err_out:
-        log.info("RUNNING COMMAND WITH ARGS:")
-        log.info(", ".join([bin_path] + bin_args))
         p = subprocess.Popen([bin_path] + bin_args,
                              stdout=subprocess.DEVNULL,
                              stderr=err_out)
@@ -410,6 +408,7 @@ while True:
 
     # If there is a recovered error file present, restart the server
     if err_output_path and os.path.isfile(err_output_path):
+        log.warning("Restarting binary due to error...")
         try:
             if not (process is None or process.poll() is not None):
                 process.terminate()
@@ -472,7 +471,7 @@ while True:
                 command_type = command.get("command", "")
                 info = command.get("info", dict())
 
-                log.warning("Executing command: {}".format(command))
+                log.info("Executing command: {}".format(command))
                 if command_type == "start":
                     # If the process is not running, start it
                     if process is None or process.poll() is not None:
