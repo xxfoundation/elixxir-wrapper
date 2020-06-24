@@ -546,7 +546,7 @@ while True:
                     if install_path == valid_paths["wrapper"]:
                         os.chmod(install_path, stat.S_IEXEC)
                         log.info("Wrapper script updated, exiting now...")
-                        sys.exit(0)
+                        os._exit(0)
                 log.info("Completed command: {}".format(command))
 
             # Update the timestamp in order to avoid repetition
