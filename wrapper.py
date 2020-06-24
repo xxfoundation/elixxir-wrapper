@@ -331,11 +331,11 @@ def get_args():
 
 # Command line arguments
 args = get_args()
-print(args)
 
 # Configure logger
 log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
                 level=log.INFO, datefmt='%d-%b-%y %H:%M:%S')
+log.info("Running with configuration: {}".format(args))
 
 binary_path = args["binary"]
 management_directory = args["s3path"]
