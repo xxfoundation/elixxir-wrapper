@@ -115,8 +115,6 @@ def start_binary(bin_path, log_file, bin_args):
     :rtype: subprocess.Popen
     """
     with open(log_file, "a") as err_out:
-        log.info("RUNNING COMMAND WITH ARGS:")
-        log.info(", ".join([bin_path] + bin_args))
         p = subprocess.Popen([bin_path] + bin_args,
                              stdout=subprocess.DEVNULL,
                              stderr=err_out)
@@ -333,11 +331,11 @@ def get_args():
 
 # Command line arguments
 args = get_args()
-print(args)
 
 # Configure logger
 log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
                 level=log.INFO, datefmt='%d-%b-%y %H:%M:%S')
+log.info("Running with configuration: {}".format(args))
 
 binary_path = args["binary"]
 management_directory = args["s3path"]
@@ -410,6 +408,7 @@ while True:
 
     # If there is a recovered error file present, restart the server
     if err_output_path and os.path.isfile(err_output_path):
+        log.warning("Restarting binary due to error...")
         try:
             if not (process is None or process.poll() is not None):
                 process.terminate()
@@ -472,7 +471,7 @@ while True:
                 command_type = command.get("command", "")
                 info = command.get("info", dict())
 
-                log.warning("Executing command: {}".format(command))
+                log.info("Executing command: {}".format(command))
                 if command_type == "start":
                     # If the process is not running, start it
                     if process is None or process.poll() is not None:
@@ -538,8 +537,16 @@ while True:
                             binary_path, tmp_path, err))
                         timestamps[i] = timestamp
                         continue
-                    # Make the binary executable
-                    os.chmod(binary_path, stat.S_IEXEC)
+
+                    # Handle binary install
+                    if install_path == valid_paths["binary"]:
+                        os.chmod(install_path, stat.S_IEXEC)
+
+                    # Handle Wrapper install
+                    if install_path == valid_paths["wrapper"]:
+                        os.chmod(install_path, stat.S_IEXEC)
+                        log.info("Wrapper script updated, exiting now...")
+                        os._exit(0)
                 log.info("Completed command: {}".format(command))
 
             # Update the timestamp in order to avoid repetition
