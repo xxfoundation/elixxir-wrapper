@@ -540,7 +540,7 @@ while True:
                     # Make the binary executable
                     os.chmod(binary_path, stat.S_IEXEC)
 
-                    if install_path == "wrapper":
+                    if install_path == valid_paths["wrapper"]:
                         log.info("Wrapper script updated, exiting now...")
                         sys.exit(0)
                 log.info("Completed command: {}".format(command))
