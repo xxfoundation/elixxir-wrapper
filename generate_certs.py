@@ -19,6 +19,9 @@ def main():
     country = input("Country (default: 'KY (Cayman Islands)'): ")
     if country == "":
         country = 'KY'
+    while len(country) != 2 or not country.isalpha():
+        print("The country code entered must be exactly two letters")
+        country = input("Country (default: 'KY (Cayman Islands)'): ")
     state = input("State/province (default: ' '): ")
     if state == "":
         state = " "
