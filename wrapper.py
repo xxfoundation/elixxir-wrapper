@@ -358,7 +358,8 @@ os.makedirs(os.path.dirname(args["logpath"]), exist_ok=True)
 err_output_path = args["erroutputpath"]
 version_file = management_directory + "/version.jsonl"
 command_file = management_directory + "/command.jsonl"
-tmp_dir = "/tmp"
+tmp_dir = args["tmpdir"]
+os.makedirs(tmp_dir, exist_ok=True)
 remotes_paths = [version_file, command_file]
 cmd_log_dir = os.path.expanduser(os.path.join(args["configdir"], "cmdlog"))
 
