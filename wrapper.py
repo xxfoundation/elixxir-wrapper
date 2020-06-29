@@ -162,12 +162,13 @@ def backup_log(src_path, id_path, s3_bucket, region,
     :rtype: None
     """
     megabyte = 1048576  # Size of one megabyte in bytes
-    backup_frequency = 10  # Frequency (in seconds) of log backups
+    max_size = 50 * megabyte
+    backup_frequency = 60  # Frequency (in seconds) of log backups
     log_index = 0
     log_name = os.path.basename(src_path)
 
     while True:
-        # Sleep for ten seconds
+        # Sleep for backup_frequency seconds
         time.sleep(backup_frequency)
         log_prefix = get_node_id(id_path)
         try:
@@ -180,7 +181,7 @@ def backup_log(src_path, id_path, s3_bucket, region,
             log.debug("Current Log Size: {}".format(log_size))
 
             # Check if the log file is too large
-            if log_size > (100 * megabyte):
+            if log_size > max_size:
                 log.warning("Log has reached maximum size. Clearing...")
                 # Clear out the log file
                 open(src_path, 'w').close()
