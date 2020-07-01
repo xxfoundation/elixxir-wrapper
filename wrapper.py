@@ -324,6 +324,8 @@ def get_args():
                         help="s3 region")
     parser.add_argument("--tmpdir", type=str, required=False,
                         help="directory for temp files", default="/tmp")
+    parser.add_argument("--cmdlogdir", type=str, required=False,
+                        help="directory for commands log", default="/opt/xxnetwork/cmdlog")
     parser.add_argument("--erroutputpath", type=str, required=False,
                         help="Path to recovered error path", default=None)
     parser.add_argument("--configoverride", type=str, required=False,
@@ -365,7 +367,7 @@ command_file = management_directory + "/command.jsonl"
 tmp_dir = args["tmpdir"]
 os.makedirs(tmp_dir, exist_ok=True)
 remotes_paths = [version_file, command_file]
-cmd_log_dir = os.path.expanduser(os.path.join(args["configdir"], "cmdlog"))
+cmd_log_dir = args["cmdlogdir"]
 
 # Config file is the binaryname.yaml inside the config directory
 config_file = os.path.expanduser(os.path.join(
