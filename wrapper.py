@@ -311,6 +311,9 @@ def get_args():
                         help="Path to the s3 management directory")
     parser.add_argument("-m", "--s3managementbucket", type=str,
                         help="Path to the s3 management bucket name")
+    parser.add_argument("--disable-s3log", action="store_true",
+                        help="Disable uploading log files to s3",
+                        default=False, required=False)
     parser.add_argument("--s3logbucket", type=str, required=True,
                         help="s3 log bucket name")
     parser.add_argument("--s3accesskey", type=str, required=True,
@@ -394,11 +397,12 @@ process = None
 node_id = get_node_id(args["idpath"])
 
 # Start the log backup service
-thr = threading.Thread(target=backup_log,
-                       args=(log_path, args["idpath"],
-                             s3_log_bucket_name, s3_bucket_region,
-                             s3_access_key_id, s3_access_key_secret))
-thr.start()
+if not args["disable_s3log"]:
+    thr = threading.Thread(target=backup_log,
+                           args=(log_path, args["idpath"],
+                                 s3_log_bucket_name, s3_bucket_region,
+                                 s3_access_key_id, s3_access_key_secret))
+    thr.start()
 
 # Frequency (in seconds) of checking for new commands
 command_frequency = 10
