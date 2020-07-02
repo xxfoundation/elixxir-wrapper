@@ -311,6 +311,9 @@ def get_args():
                         help="Path to the s3 management directory")
     parser.add_argument("-m", "--s3managementbucket", type=str,
                         help="Path to the s3 management bucket name")
+    parser.add_argument("--disable-s3log", action="store_true",
+                        help="Disable uploading log files to s3",
+                        default=False, required=False)
     parser.add_argument("--s3logbucket", type=str, required=True,
                         help="s3 log bucket name")
     parser.add_argument("--s3accesskey", type=str, required=True,
@@ -321,6 +324,8 @@ def get_args():
                         help="s3 region")
     parser.add_argument("--tmpdir", type=str, required=False,
                         help="directory for temp files", default="/tmp")
+    parser.add_argument("--cmdlogdir", type=str, required=False,
+                        help="directory for commands log", default="/opt/xxnetwork/cmdlog")
     parser.add_argument("--erroutputpath", type=str, required=False,
                         help="Path to recovered error path", default=None)
     parser.add_argument("--configoverride", type=str, required=False,
@@ -362,7 +367,7 @@ command_file = management_directory + "/command.jsonl"
 tmp_dir = args["tmpdir"]
 os.makedirs(tmp_dir, exist_ok=True)
 remotes_paths = [version_file, command_file]
-cmd_log_dir = os.path.expanduser(os.path.join(args["configdir"], "cmdlog"))
+cmd_log_dir = args["cmdlogdir"]
 
 # Config file is the binaryname.yaml inside the config directory
 config_file = os.path.expanduser(os.path.join(
@@ -394,11 +399,12 @@ process = None
 node_id = get_node_id(args["idpath"])
 
 # Start the log backup service
-thr = threading.Thread(target=backup_log,
-                       args=(log_path, args["idpath"],
-                             s3_log_bucket_name, s3_bucket_region,
-                             s3_access_key_id, s3_access_key_secret))
-thr.start()
+if not args["disable_s3log"]:
+    thr = threading.Thread(target=backup_log,
+                           args=(log_path, args["idpath"],
+                                 s3_log_bucket_name, s3_bucket_region,
+                                 s3_access_key_id, s3_access_key_secret))
+    thr.start()
 
 # Frequency (in seconds) of checking for new commands
 command_frequency = 10
@@ -410,6 +416,7 @@ while True:
 
     # If there is a recovered error file present, restart the server
     if err_output_path and os.path.isfile(err_output_path):
+        time.sleep(10)
         log.warning("Restarting binary due to error...")
         try:
             if not (process is None or process.poll() is not None):
