@@ -416,6 +416,7 @@ while True:
 
     # If there is a recovered error file present, restart the server
     if err_output_path and os.path.isfile(err_output_path):
+        time.sleep(120)
         log.warning("Restarting binary due to error...")
         try:
             if not (process is None or process.poll() is not None):
