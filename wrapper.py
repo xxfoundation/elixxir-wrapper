@@ -162,7 +162,7 @@ def backup_log(src_path, id_path, s3_bucket, region,
     :rtype: None
     """
     megabyte = 1048576  # Size of one megabyte in bytes
-    max_size = 50 * megabyte
+    max_size = 1 * megabyte
     backup_frequency = 60  # Frequency (in seconds) of log backups
     log_index = 0
     log_name = os.path.basename(src_path)
