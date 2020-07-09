@@ -28,13 +28,19 @@ import hashlib
 
 # FUNCTIONS --------------------------------------------------------------------
 
+log_group_name = "xxnetwork-betanet-logs"
+log_prefix = ""
+log_events = []
+message_size = 0
+
+
 def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_secret):
+    global log_group_name, log_prefix, log_events, message_size
 
     # Setup cloudwatch logs client
-    log_group_name = 'xxnetwork-betanet-logs'
     client = boto3.client('logs', region_name=region,
                           aws_access_key_id=access_key_id,
-                          aws_access_key_secret=access_key_secret)
+                          aws_secret_access_key=access_key_secret)
     upload_sequence_token = ""
     log_prefix = get_node_id(id_path)
     try:
@@ -46,28 +52,37 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
             client.create_log_stream(logGroupName=log_group_name, logStreamName=log_prefix)
         else:
             for s in streams:
-                if s['logStreamName'] == log_prefix:
+                if log_prefix == s['logStreamName'] and 'uploadSequenceToken' in s.keys():
                     upload_sequence_token = s['uploadSequenceToken']
-            if upload_sequence_token == "":
-                client.create_log_stream(logGroupName='', logStreamName=log_prefix)
 
     except Exception as e:
         log.error(e)
         return
 
     # Wait for log file to exist
-    while not os.path.isfile(log_path):
+    while not os.path.isfile(log_file_path):
         time.sleep(0.1)
 
     logfile = open(log_file_path, 'r')
     logfile.seek(0, os.SEEK_END)
     buffer = ""
-    log_events = []
+
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"] # using these to deliniate the start of an event
-    message_size = 0
+    last_line_time = time.time()
+    last_push_time = time.time()
     while True:
         line = logfile.readline()
         # If there's no line, wait 0.1s then try again
+        if time.time() - last_line_time > 20 and buffer != "":
+            event_size = len(buffer.encode('utf-8')) + 26
+            log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': buffer})
+            message_size += event_size
+            buffer = ""
+
+        if time.time() - last_push_time > 300 and len(log_events) > 0:
+            upload_sequence_token = send(client, upload_sequence_token)
+            last_push_time = time.time()
+
         if not line:
             time.sleep(0.1)
             continue
@@ -77,35 +92,48 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
             event_size = len(buffer.encode('utf-8')) + 26  # Per AWS docs, each event is size of message + 26
             if message_size + event_size > 1000000:
                 # if getting close to 1mb limit for a batch, send current batch to cloudwatch
-                try:
-                    if upload_sequence_token == "":
-                        # for the first message in a stream, there is no sequence token
-                        resp = client.put_log_events(logGroupName=log_group_name,
-                                                     logStreamName=log_prefix,
-                                                     logEvents=log_events)
-                    else:
-                        resp = client.put_log_events(logGroupName=log_group_name,
-                                                     logStreamName=log_prefix,
-                                                     logEvents=log_events,
-                                                     sequenceToken=upload_sequence_token)
-                    upload_sequence_token = resp['nextSequenceToken']  # set the next sequence token
-
-                    # IF anything was rejected, log as warning
-                    if len(resp['rejectedLogEventsInfo']) > 0:
-                        log.warning("Some log events were rejected:")
-                        log.warning(resp['rejectedLogEventsInfo'])
-
-                    # reset events & current message size
-                    log_events = []
-                    message_size = 0
-                except Exception as e:
-                    log.error(e)
+                upload_sequence_token = send(client, upload_sequence_token)
+                last_push_time = time.time()
             log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': buffer})
             message_size += event_size
             buffer = ""
             continue
 
         buffer += line  # Log messages can be multi-line (ex: stack trace)
+
+        last_line_time = time.time()
+
+
+def send(client, upload_sequence_token):
+    global log_group_name, log_prefix, log_events, message_size
+
+    if len(log_events) == 0:
+        return upload_sequence_token
+
+    try:
+        if upload_sequence_token == "":
+            # for the first message in a stream, there is no sequence token
+            resp = client.put_log_events(logGroupName=log_group_name,
+                                         logStreamName=log_prefix,
+                                         logEvents=log_events)
+        else:
+            resp = client.put_log_events(logGroupName=log_group_name,
+                                         logStreamName=log_prefix,
+                                         logEvents=log_events,
+                                         sequenceToken=upload_sequence_token)
+        upload_sequence_token = resp['nextSequenceToken']  # set the next sequence token
+
+        # IF anything was rejected, log as warning
+        if 'rejectedLogEventsInfo' in resp.keys():
+            log.warning("Some log events were rejected:")
+            log.warning(resp['rejectedLogEventsInfo'])
+
+        # reset events & current message size
+        log_events = []
+        message_size = 0
+        return upload_sequence_token
+    except Exception as e:
+        log.error(e)
 
 
 def upload(src_path, dst_path, s3_bucket, region,
