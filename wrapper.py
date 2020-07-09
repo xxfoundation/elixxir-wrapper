@@ -35,6 +35,17 @@ message_size = 0
 
 
 def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_secret):
+    """
+    cloudwatch_log is intended to run in a thread.  It will monitor the file at
+    log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
+    stream, one will be created for it, named by node ID.
+
+    :param log_file_path: Path to the log file
+    :param id_path: path to node's id file
+    :param region: AWS region
+    :param access_key_id: aws access key
+    :param access_key_secret: aws secret key
+    """
     global log_group_name, log_prefix, log_events, message_size
 
     # Setup cloudwatch logs client
@@ -105,6 +116,12 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
 
 
 def send(client, upload_sequence_token):
+    """
+    send is a helper function for cloudwatch_log, used to push a batch of events to the proper stream
+    :param client: cloudwatch logs client
+    :param upload_sequence_token: sequence token for log stream
+    :return: new sequence token
+    """
     global log_group_name, log_prefix, log_events, message_size
 
     if len(log_events) == 0:
