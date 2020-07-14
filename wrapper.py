@@ -28,13 +28,13 @@ import hashlib
 
 # FUNCTIONS --------------------------------------------------------------------
 
-log_group_name = "xxnetwork-betanet-logs"
 log_prefix = ""
 log_events = []
 message_size = 0
+log_file = None
 
 
-def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_secret):
+def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_key_id, access_key_secret):
     """
     cloudwatch_log is intended to run in a thread.  It will monitor the file at
     log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
@@ -42,11 +42,20 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
 
     :param log_file_path: Path to the log file
     :param id_path: path to node's id file
+    :param cloudwatch_log_group: group name for cloudwatch logs
     :param region: AWS region
     :param access_key_id: aws access key
     :param access_key_secret: aws secret key
     """
-    global log_group_name, log_prefix, log_events, message_size
+    global log_file, log_prefix, log_events, message_size
+
+    if not log_file:
+        # Wait for log file to exist
+        while not os.path.isfile(log_file_path):
+            time.sleep(0.1)
+
+        log_file = open(log_file_path, 'r')
+    buffer = ""
 
     # Setup cloudwatch logs client
     client = boto3.client('logs', region_name=region,
@@ -56,11 +65,11 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
     log_prefix = get_node_id(id_path)
     try:
         # Determine if stream exists.  If not, make one.
-        streams = client.describe_log_streams(logGroupName=log_group_name,
+        streams = client.describe_log_streams(logGroupName=cloudwatch_log_group,
                                               logStreamNamePrefix=log_prefix)['logStreams']
 
         if len(streams) == 0:
-            client.create_log_stream(logGroupName=log_group_name, logStreamName=log_prefix)
+            client.create_log_stream(logGroupName=cloudwatch_log_group, logStreamName=log_prefix)
         else:
             for s in streams:
                 if log_prefix == s['logStreamName'] and 'uploadSequenceToken' in s.keys():
@@ -70,28 +79,22 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
         log.error(e)
         return
 
-    # Wait for log file to exist
-    while not os.path.isfile(log_file_path):
-        time.sleep(0.1)
-
-    logfile = open(log_file_path, 'r')
-    logfile.seek(0, os.SEEK_END)
-    buffer = ""
+    log.info("Starting cloudwatch logging...")
 
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"] # using these to deliniate the start of an event
     last_line_time = time.time()
     last_push_time = time.time()
     while True:
-        line = logfile.readline()
+        line = log_file.readline()
         # If there's no line, wait 0.1s then try again
-        if time.time() - last_line_time > 20 and buffer != "":
+        if time.time() - last_line_time > 3 and buffer != "":
             event_size = len(buffer.encode('utf-8')) + 26
             log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': buffer})
             message_size += event_size
             buffer = ""
 
-        if time.time() - last_push_time > 300 and len(log_events) > 0:
-            upload_sequence_token = send(client, upload_sequence_token)
+        if time.time() - last_push_time > 10 and len(log_events) > 0:
+            upload_sequence_token = send(client, upload_sequence_token, cloudwatch_log_group)
             last_push_time = time.time()
 
         if not line:
@@ -103,7 +106,7 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
             event_size = len(buffer.encode('utf-8')) + 26  # Per AWS docs, each event is size of message + 26
             if message_size + event_size > 1000000:
                 # if getting close to 1mb limit for a batch, send current batch to cloudwatch
-                upload_sequence_token = send(client, upload_sequence_token)
+                upload_sequence_token = send(client, upload_sequence_token, cloudwatch_log_group)
                 last_push_time = time.time()
             log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': buffer})
             message_size += event_size
@@ -115,14 +118,15 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
         last_line_time = time.time()
 
 
-def send(client, upload_sequence_token):
+def send(client, upload_sequence_token, cloudwatch_log_group):
     """
     send is a helper function for cloudwatch_log, used to push a batch of events to the proper stream
     :param client: cloudwatch logs client
     :param upload_sequence_token: sequence token for log stream
+    :param cloudwatch_log_group: log group name for cloudwatch logs
     :return: new sequence token
     """
-    global log_group_name, log_prefix, log_events, message_size
+    global log_prefix, log_events, message_size
 
     if len(log_events) == 0:
         return upload_sequence_token
@@ -130,11 +134,11 @@ def send(client, upload_sequence_token):
     try:
         if upload_sequence_token == "":
             # for the first message in a stream, there is no sequence token
-            resp = client.put_log_events(logGroupName=log_group_name,
+            resp = client.put_log_events(logGroupName=cloudwatch_log_group,
                                          logStreamName=log_prefix,
                                          logEvents=log_events)
         else:
-            resp = client.put_log_events(logGroupName=log_group_name,
+            resp = client.put_log_events(logGroupName=cloudwatch_log_group,
                                          logStreamName=log_prefix,
                                          logEvents=log_events,
                                          sequenceToken=upload_sequence_token)
@@ -435,11 +439,11 @@ def get_args():
                         help="Path to the s3 management directory")
     parser.add_argument("-m", "--s3managementbucket", type=str,
                         help="Path to the s3 management bucket name")
-    parser.add_argument("--disable-s3log", action="store_true",
-                        help="Disable uploading log files to s3",
+    parser.add_argument("--disable-cloudwatch", action="store_true",
+                        help="Disable uploading log events to cloudwatch",
                         default=False, required=False)
-    parser.add_argument("--s3logbucket", type=str, required=True,
-                        help="s3 log bucket name")
+    parser.add_argument("--cloudwatch-log-group", type=str, required=True,
+                        help="Log group for cloudwatch logging")
     parser.add_argument("--s3accesskey", type=str, required=True,
                         help="s3 access key")
     parser.add_argument("--s3secret", type=str, required=True,
@@ -477,7 +481,6 @@ if not os.path.exists(rsa_certificate_path):  # check creds dir for file as well
     rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
                                                            "network_management.crt"))
 
-s3_log_bucket_name = args["s3logbucket"]
 s3_management_bucket_name = args["s3managementbucket"]
 s3_access_key_id = args["s3accesskey"]
 s3_access_key_secret = args["s3secret"]
@@ -522,11 +525,15 @@ process = None
 # Note this is done before the thread split to guarantee the same uuid.
 node_id = get_node_id(args["idpath"])
 
+if os.path.isfile(log_path):
+    log_file = open(log_path, 'r')
+    log_file.seek(0, os.SEEK_END)
+
 # Start the log backup service
-if not args["disable_s3log"]:
+if not args["disable_cloudwatch"]:
     thr = threading.Thread(target=cloudwatch_log,
-                           args=(log_path, args["idpath"], s3_bucket_region,
-                                 s3_access_key_id, s3_access_key_secret))
+                           args=(log_path, args["idpath"], args['cloudwatch_log_group'],
+                                 s3_bucket_region, s3_access_key_id, s3_access_key_secret))
     thr.start()
 
 # Frequency (in seconds) of checking for new commands
