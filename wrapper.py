@@ -27,7 +27,7 @@ import hashlib
 
 # FUNCTIONS --------------------------------------------------------------------
 
-log_prefix = ""
+log_stream_name = ""
 log_events = []
 message_size = 0
 log_file = None
@@ -46,7 +46,7 @@ def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_
     :param access_key_id: aws access key
     :param access_key_secret: aws secret key
     """
-    global read_node_id, log_file, log_prefix, log_events, message_size
+    global read_node_id, log_file, log_stream_name, log_events, message_size
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 200 * megabyte
     buffer = ""
@@ -90,10 +90,10 @@ def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_
                                               logStreamNamePrefix=log_stream_name)['logStreams']
 
         if len(streams) == 0:
-            client.create_log_stream(logGroupName=cloudwatch_log_group, logStreamName=log_prefix)
+            client.create_log_stream(logGroupName=cloudwatch_log_group, logStreamName=log_stream_name)
         else:
             for s in streams:
-                if log_prefix == s['logStreamName'] and 'uploadSequenceToken' in s.keys():
+                if log_stream_name == s['logStreamName'] and 'uploadSequenceToken' in s.keys():
                     upload_sequence_token = s['uploadSequenceToken']
 
     except Exception as e:
@@ -159,7 +159,7 @@ def send(client, upload_sequence_token, cloudwatch_log_group):
     :param cloudwatch_log_group: log group name for cloudwatch logs
     :return: new sequence token
     """
-    global log_prefix, log_events, message_size
+    global log_stream_name, log_events, message_size
 
     if len(log_events) == 0:
         return upload_sequence_token
@@ -168,11 +168,11 @@ def send(client, upload_sequence_token, cloudwatch_log_group):
         if upload_sequence_token == "":
             # for the first message in a stream, there is no sequence token
             resp = client.put_log_events(logGroupName=cloudwatch_log_group,
-                                         logStreamName=log_prefix,
+                                         logStreamName=log_stream_name,
                                          logEvents=log_events)
         else:
             resp = client.put_log_events(logGroupName=cloudwatch_log_group,
-                                         logStreamName=log_prefix,
+                                         logStreamName=log_stream_name,
                                          logEvents=log_events,
                                          sequenceToken=upload_sequence_token)
         upload_sequence_token = resp['nextSequenceToken']  # set the next sequence token
