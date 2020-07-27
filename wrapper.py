@@ -48,7 +48,7 @@ def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_
     """
     global read_node_id, log_file, log_stream_name, log_events, message_size
     megabyte = 1048576  # Size of one megabyte in bytes
-    max_size = 200 * megabyte
+    max_size = 100 * megabyte
     buffer = ""
     upload_sequence_token = ""
 
@@ -57,7 +57,7 @@ def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_
         while not os.path.isfile(log_file_path):
             time.sleep(0.1)
 
-        log_file = open(log_file_path, 'r')
+        log_file = open(log_file_path, 'r+')
 
     # Setup cloudwatch logs client
     client = boto3.client('logs', region_name=region,
@@ -145,7 +145,8 @@ def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_
         if log_size > max_size:
             log.warning("Log has reached maximum size. Clearing...")
             # Clear out the log file
-            open(log_file_path, 'w').close()
+            log_file.close()
+            log_file = open(log_file_path, "w+")
             # Increment the log_index
             log.info("Log has been cleared. New Size: {}".format(
                 os.path.getsize(log_file_path)))
@@ -505,7 +506,7 @@ process = None
 node_id = get_node_id(args["idpath"])
 
 if os.path.isfile(log_path):
-    log_file = open(log_path, 'r')
+    log_file = open(log_path, 'r+')
     log_file.seek(0, os.SEEK_END)
 
 # Start the log backup service
