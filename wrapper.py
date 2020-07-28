@@ -60,18 +60,21 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
     last_push_time = time.time()
     while True:
         line = log_file.readline()
-        # If there's no line, wait 0.1s then try again
-        if time.time() - last_line_time > 0.5 and event_buffer != "":
-            event_size = len(event_buffer.encode('utf-8')) + 26
-            log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
-            message_size += event_size
-            event_buffer = ""
 
+        # If no new line, wait 0.1s and try again
         if not line:
+            # if it's been more than 0.5s since last line, push to buffer
+            if time.time() - last_line_time > 0.5 and event_buffer != "":
+                event_size = len(event_buffer.encode('utf-8')) + 26
+                log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
+                message_size += event_size
+                event_buffer = ""
             time.sleep(0.1)
             continue
+
         last_line_time = time.time()
 
+        # If we clearly have a new line, push buffer to events
         if line.split(' ')[0] in log_starters and event_buffer != "":
             # New event starting, push buffer to events
             event_size = len(event_buffer.encode('utf-8')) + 26  # Per AWS docs, each event is size of message + 26
