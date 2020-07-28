@@ -27,7 +27,7 @@ import hashlib
 
 # FUNCTIONS --------------------------------------------------------------------
 
-log_file = None
+last_line_time = time.time()
 
 
 def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_secret):
@@ -43,61 +43,29 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
     :param access_key_secret: aws secret key
     """
     global read_node_id, log_file
+    # Constants
     cloudwatch_log_group = "xxnetwork-alphanet-logs-prod"  # Cloudwatch log group name
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
-    log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"]  # using these to deliniate the start of an event
+
+    # Event buffer and storage
     event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
     log_events = []  # Buffer of events from log not yet sent to cloudwatch
-    message_size = 0  # Size of messages buffer based on AWS api
 
     client, log_stream_name, upload_sequence_token = init(log_file_path, id_path, region,
                                                           cloudwatch_log_group, access_key_id, access_key_secret)
 
     log.info("Starting cloudwatch logging...")
 
-    last_line_time = time.time()
     last_push_time = time.time()
     while True:
-        line = log_file.readline()
-
-        # If no new line, wait 0.1s and try again
-        if not line:
-            # if it's been more than 0.5s since last line, push to buffer
-            if time.time() - last_line_time > 0.5 and event_buffer != "":
-                event_size = len(event_buffer.encode('utf-8')) + 26
-                log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
-                message_size += event_size
-                event_buffer = ""
-            time.sleep(0.1)
-            continue
-
-        last_line_time = time.time()
-
-        # If we clearly have a new line, push buffer to events
-        if line.split(' ')[0] in log_starters and event_buffer != "":
-            # New event starting, push buffer to events
-            event_size = len(event_buffer.encode('utf-8')) + 26  # Per AWS docs, each event is size of message + 26
-            if message_size + event_size > 1000000:
-                # if getting close to 1mb limit for a batch, send current batch to cloudwatch
-                upload_sequence_token = send(client, upload_sequence_token,
-                                             log_events, log_stream_name, cloudwatch_log_group)
-                log_events = []
-                message_size = 0
-                last_push_time = time.time()
-            log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
-            message_size += event_size
-            event_buffer = ""
-            continue
-
-        event_buffer += line  # Log messages can be multi-line (ex: stack trace)
+        event_buffer, log_events = process_line(event_buffer, log_events)
 
         # Send to cloudwatch if there are events
         if time.time() - last_push_time > 1 and len(log_events) > 0:
             upload_sequence_token = send(client, upload_sequence_token,
                                          log_events, log_stream_name, cloudwatch_log_group)
             log_events = []
-            message_size = 0
             last_push_time = time.time()
 
         # Check if the log file is too large
@@ -116,15 +84,16 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
 def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, access_key_secret):
     """
     Initialize client for cloudwatch logging
-    :param log_file_path:
-    :param id_path:
-    :param region:
-    :param cloudwatch_log_group:
-    :param access_key_id:
-    :param access_key_secret:
-    :return:
+    :param log_file_path: path to log output
+    :param id_path: path to id file
+    :param region: aws region
+    :param cloudwatch_log_group: cloudwatch log group name
+    :param access_key_id: AWS access key id
+    :param access_key_secret: AWS access key secret
+    :return client, log_stream_name, upload_sequence_token:
     """
     global log_file, read_node_id
+    upload_sequence_token = ""
     if not log_file:
         # Wait for log file to exist
         while not os.path.isfile(log_file_path):
@@ -142,17 +111,18 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
         log_prefix = read_node_id
     # Read node ID from the file
     else:
-        while not os.path.exists(id_path):
-            time.sleep(0.1)
+        if not os.path.exists(id_path):
+            log.error("No node file found, waiting for creation...")
+            while not os.path.exists(id_path):
+                time.sleep(0.1)
         try:
-            if os.path.exists(id_path):
-                with open(id_path, 'r') as idfile:
-                    new_node_id = json.loads(idfile.read().strip()).get("id", None)
-                    if new_node_id:
-                        read_node_id = new_node_id
-                        log_prefix = new_node_id
+            with open(id_path, 'r') as idfile:
+                new_node_id = json.loads(idfile.read().strip()).get("id", None)
+                if new_node_id:
+                    read_node_id = new_node_id
+                    log_prefix = new_node_id
         except Exception as error:
-            log.warning("Could not open node ID at {}: {}".format(id_path, error))
+            log.error("Could not open node ID at {}: {}".format(id_path, error))
 
     log_name = os.path.basename(log_file_path)
     log_stream_name = "{}-{}".format(log_prefix, log_name)
@@ -174,6 +144,39 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
         return
 
     return client, log_stream_name, upload_sequence_token
+
+
+def process_line(event_buffer, log_events):
+    """
+    Accepts current buffer and log events from main loop
+    Processes one line of input, either adding an event or adding it to the buffer
+    New events are marked by a string in log_starters, or are separated by more than 0.5 seconds
+    :param event_buffer: string buffer of concatenated lines that make up a single event
+    :param log_events: current array of events
+    :return:
+    """
+    global last_line_time, log_file
+    log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"]  # using these to deliniate the start of an event
+
+    line = log_file.readline()
+    # If no new line, wait 0.1s and try again
+    if not line:
+        # if it's been more than 0.5s since last line, push to buffer
+        if time.time() - last_line_time > 0.5 and event_buffer != "":
+            log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
+            event_buffer = ""
+        time.sleep(0.1)
+    last_line_time = time.time()
+
+    # If we clearly have a new line, push buffer to events
+    if line.split(' ')[0] in log_starters and event_buffer != "":
+        # New event starting, push buffer to events
+        log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
+        event_buffer = ""
+
+    event_buffer += line  # Log messages can be multi-line (ex: stack trace)
+
+    return event_buffer, log_events
 
 
 def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_log_group):
@@ -284,21 +287,21 @@ def download(src_path, dst_path, s3_bucket, region,
                   exc_info=True)
 
 
-def start_binary(bin_path, log_file, bin_args):
+def start_binary(bin_path, log_file_path, bin_args):
     """
     Starts the binary at the given path with the given args.
     Returns the newly-created subprocess.
 
     :param bin_path: Path to the binary
     :type bin_path: str
-    :param log_file: Path to the binary log file
-    :type log_file: str
+    :param log_file_path: Path to the binary log file
+    :type log_file_path: str
     :param bin_args: Arguments for the binary
     :type bin_args: list[str]
     :return: Newly-created subprocess
     :rtype: subprocess.Popen
     """
-    with open(log_file, "a") as err_out:
+    with open(log_file_path, "a") as err_out:
         p = subprocess.Popen([bin_path] + bin_args,
                              stdout=subprocess.DEVNULL,
                              stderr=err_out)
@@ -526,6 +529,7 @@ process = None
 node_id = get_node_id(args["idpath"])
 
 # If there is already a log file, open it here so we don't lose records
+log_file = None
 if os.path.isfile(log_path):
     log_file = open(log_path, 'r+')
     log_file.seek(0, os.SEEK_END)
