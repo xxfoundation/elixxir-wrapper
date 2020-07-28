@@ -27,13 +27,10 @@ import hashlib
 
 # FUNCTIONS --------------------------------------------------------------------
 
-log_stream_name = ""
-log_events = []
-message_size = 0
 log_file = None
 
 
-def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_key_id, access_key_secret):
+def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_secret):
     """
     cloudwatch_log is intended to run in a thread.  It will monitor the file at
     log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
@@ -41,17 +38,90 @@ def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_
 
     :param log_file_path: Path to the log file
     :param id_path: path to node's id file
-    :param cloudwatch_log_group: group name for cloudwatch logs
     :param region: AWS region
     :param access_key_id: aws access key
     :param access_key_secret: aws secret key
     """
-    global read_node_id, log_file, log_stream_name, log_events, message_size
+    global read_node_id, log_file
+    cloudwatch_log_group = "xxnetwork-alphanet-logs-prod"  # Cloudwatch log group name
     megabyte = 1048576  # Size of one megabyte in bytes
-    max_size = 100 * megabyte
-    buffer = ""
-    upload_sequence_token = ""
+    max_size = 100 * megabyte  # Maximum log file size before truncation
+    log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"]  # using these to deliniate the start of an event
+    event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
+    log_events = []  # Buffer of events from log not yet sent to cloudwatch
+    message_size = 0  # Size of messages buffer based on AWS api
 
+    client, log_stream_name, upload_sequence_token = init(log_file_path, id_path, region,
+                                                          cloudwatch_log_group, access_key_id, access_key_secret)
+
+    log.info("Starting cloudwatch logging...")
+
+    last_line_time = time.time()
+    last_push_time = time.time()
+    while True:
+        line = log_file.readline()
+        # If there's no line, wait 0.1s then try again
+        if time.time() - last_line_time > 0.5 and event_buffer != "":
+            event_size = len(event_buffer.encode('utf-8')) + 26
+            log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
+            message_size += event_size
+            event_buffer = ""
+
+        if not line:
+            time.sleep(0.1)
+            continue
+        last_line_time = time.time()
+
+        if line.split(' ')[0] in log_starters and event_buffer != "":
+            # New event starting, push buffer to events
+            event_size = len(event_buffer.encode('utf-8')) + 26  # Per AWS docs, each event is size of message + 26
+            if message_size + event_size > 1000000:
+                # if getting close to 1mb limit for a batch, send current batch to cloudwatch
+                upload_sequence_token = send(client, upload_sequence_token,
+                                             log_events, log_stream_name, cloudwatch_log_group)
+                log_events = []
+                message_size = 0
+                last_push_time = time.time()
+            log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
+            message_size += event_size
+            event_buffer = ""
+            continue
+
+        event_buffer += line  # Log messages can be multi-line (ex: stack trace)
+
+        # Send to cloudwatch if there are events
+        if time.time() - last_push_time > 1 and len(log_events) > 0:
+            upload_sequence_token = send(client, upload_sequence_token,
+                                         log_events, log_stream_name, cloudwatch_log_group)
+            log_events = []
+            message_size = 0
+            last_push_time = time.time()
+
+        # Check if the log file is too large
+        log_size = os.path.getsize(log_file_path)
+        log.debug("Current Log Size: {}".format(log_size))
+        if log_size > max_size:
+            log.warning("Log has reached maximum size. Clearing...")
+            # Clear out the log file
+            log_file.close()
+            log_file = open(log_file_path, "w+")
+            # Increment the log_index
+            log.info("Log has been cleared. New Size: {}".format(
+                os.path.getsize(log_file_path)))
+
+
+def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, access_key_secret):
+    """
+    Initialize client for cloudwatch logging
+    :param log_file_path:
+    :param id_path:
+    :param region:
+    :param cloudwatch_log_group:
+    :param access_key_id:
+    :param access_key_secret:
+    :return:
+    """
+    global log_file, read_node_id
     if not log_file:
         # Wait for log file to exist
         while not os.path.isfile(log_file_path):
@@ -67,7 +137,7 @@ def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_
     log_prefix = ""
     if read_node_id:
         log_prefix = read_node_id
-    # Read it from the file
+    # Read node ID from the file
     else:
         while not os.path.exists(id_path):
             time.sleep(0.1)
@@ -100,68 +170,19 @@ def cloudwatch_log(log_file_path, id_path, cloudwatch_log_group, region, access_
         log.error(e)
         return
 
-    log.info("Starting cloudwatch logging...")
-
-    log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"]  # using these to deliniate the start of an event
-    last_line_time = time.time()
-    last_push_time = time.time()
-    while True:
-        line = log_file.readline()
-        # If there's no line, wait 0.1s then try again
-        if time.time() - last_line_time > 2 and buffer != "":
-            event_size = len(buffer.encode('utf-8')) + 26
-            log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': buffer})
-            message_size += event_size
-            buffer = ""
-
-        if time.time() - last_push_time > 5 and len(log_events) > 0:
-            upload_sequence_token = send(client, upload_sequence_token, cloudwatch_log_group)
-            last_push_time = time.time()
-
-        if not line:
-            time.sleep(0.1)
-            continue
-
-        if line.split(' ')[0] in log_starters and buffer != "":
-            # New event starting, push buffer to events
-            event_size = len(buffer.encode('utf-8')) + 26  # Per AWS docs, each event is size of message + 26
-            if message_size + event_size > 1000000:
-                # if getting close to 1mb limit for a batch, send current batch to cloudwatch
-                upload_sequence_token = send(client, upload_sequence_token, cloudwatch_log_group)
-                last_push_time = time.time()
-            log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': buffer})
-            message_size += event_size
-            buffer = ""
-            continue
-
-        buffer += line  # Log messages can be multi-line (ex: stack trace)
-
-        last_line_time = time.time()
-
-        log_size = os.path.getsize(log_file_path)
-        log.debug("Current Log Size: {}".format(log_size))
-
-        # Check if the log file is too large
-        if log_size > max_size:
-            log.warning("Log has reached maximum size. Clearing...")
-            # Clear out the log file
-            log_file.close()
-            log_file = open(log_file_path, "w+")
-            # Increment the log_index
-            log.info("Log has been cleared. New Size: {}".format(
-                os.path.getsize(log_file_path)))
+    return client, log_stream_name, upload_sequence_token
 
 
-def send(client, upload_sequence_token, cloudwatch_log_group):
+def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_log_group):
     """
     send is a helper function for cloudwatch_log, used to push a batch of events to the proper stream
+    :param log_events: Log events to be sent to cloudwatch
+    :param log_stream_name: Name of cloudwatch log stream
+    :param cloudwatch_log_group: Name of cloudwatch log group
     :param client: cloudwatch logs client
     :param upload_sequence_token: sequence token for log stream
-    :param cloudwatch_log_group: log group name for cloudwatch logs
     :return: new sequence token
     """
-    global log_stream_name, log_events, message_size
-
     if len(log_events) == 0:
         return upload_sequence_token
 
@@ -184,8 +205,6 @@ def send(client, upload_sequence_token, cloudwatch_log_group):
             log.warning(resp['rejectedLogEventsInfo'])
 
         # reset events & current message size
-        log_events = []
-        message_size = 0
         return upload_sequence_token
     except Exception as e:
         log.error(e)
@@ -422,8 +441,6 @@ def get_args():
                         default=False, required=False)
     parser.add_argument("--s3logbucket", type=str, required=True,
                         help="s3 log bucket name")
-    parser.add_argument("--cloudwatch-log-group", type=str, required=False,
-                        help="Log group for cloudwatch logging", default="xxnetwork-alphanet-logs-prod")
     parser.add_argument("--s3accesskey", type=str, required=True,
                         help="s3 access key")
     parser.add_argument("--s3secret", type=str, required=True,
@@ -505,6 +522,7 @@ process = None
 # Note this is done before the thread split to guarantee the same uuid.
 node_id = get_node_id(args["idpath"])
 
+# If there is already a log file, open it here so we don't lose records
 if os.path.isfile(log_path):
     log_file = open(log_path, 'r+')
     log_file.seek(0, os.SEEK_END)
@@ -512,8 +530,7 @@ if os.path.isfile(log_path):
 # Start the log backup service
 if not args["disable_cloudwatch"]:
     thr = threading.Thread(target=cloudwatch_log,
-                           args=(log_path, args["idpath"], args['cloudwatch_log_group'],
-                                 s3_bucket_region, s3_access_key_id, s3_access_key_secret))
+                           args=(log_path, args["idpath"], s3_bucket_region, s3_access_key_id, s3_access_key_secret))
     thr.start()
 
 # Frequency (in seconds) of checking for new commands
