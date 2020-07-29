@@ -51,8 +51,12 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
     log_events = []  # Buffer of events from log not yet sent to cloudwatch
 
-    client, log_stream_name, upload_sequence_token = init(log_file_path, id_path, region,
-                                                          cloudwatch_log_group, access_key_id, access_key_secret)
+    client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path, region,
+                                                                    cloudwatch_log_group, access_key_id,
+                                                                    access_key_secret)
+    if init_err:
+        log.error("Failed to init cloudwatch logging: {}".format(init_err))
+        return
 
     log.info("Starting cloudwatch logging...")
 
@@ -133,10 +137,9 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
                     upload_sequence_token = s['uploadSequenceToken']
 
     except Exception as e:
-        log.error(e)
-        return
+        return None, None, None, e
 
-    return client, log_stream_name, upload_sequence_token
+    return client, log_stream_name, upload_sequence_token, None
 
 
 # This is used exclusively in process_line, and needs to be stored across calls
