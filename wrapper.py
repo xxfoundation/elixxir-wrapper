@@ -447,7 +447,7 @@ def get_args():
                         default=False, required=False)
     parser.add_argument("--cloudwatch-log-group", type=str,
                         help="Log group for cloudwatch logging",
-                        default="xxnetwork-alphanet-logs-prod")
+                        default="xxnetwork-logs-prod")
     parser.add_argument("--s3accesskey", type=str, required=True,
                         help="s3 access key")
     parser.add_argument("--s3secret", type=str, required=True,
