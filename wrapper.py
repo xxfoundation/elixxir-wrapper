@@ -28,12 +28,13 @@ import hashlib
 # FUNCTIONS --------------------------------------------------------------------
 
 
-def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_secret):
+def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret):
     """
     cloudwatch_log is intended to run in a thread.  It will monitor the file at
     log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
     stream, one will be created for it, named by node ID.
 
+    :param cloudwatch_log_group: log group name for cloudwatch logging
     :param log_file_path: Path to the log file
     :param id_path: path to node's id file
     :param region: AWS region
@@ -42,7 +43,6 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
     """
     global read_node_id, log_file
     # Constants
-    cloudwatch_log_group = "xxnetwork-alphanet-logs-prod"  # Cloudwatch log group name
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
     push_frequency = 1  # frequency of pushes to cloudwatch, in seconds
@@ -445,8 +445,9 @@ def get_args():
     parser.add_argument("--disable-cloudwatch", action="store_true",
                         help="Disable uploading log events to cloudwatch",
                         default=False, required=False)
-    parser.add_argument("--s3logbucket", type=str, required=True,
-                        help="s3 log bucket name")
+    parser.add_argument("--cloudwatch-log-group", type=str,
+                        help="Log group for cloudwatch logging",
+                        default="xxnetwork-alphanet-logs-prod")
     parser.add_argument("--s3accesskey", type=str, required=True,
                         help="s3 access key")
     parser.add_argument("--s3secret", type=str, required=True,
@@ -461,6 +462,10 @@ def get_args():
                         help="Path to recovered error path", default=None)
     parser.add_argument("--configoverride", type=str, required=False,
                         help="Override for config file path", default="")
+
+    # This is deprecated but cannot be deleted without a service file update
+    parser.add_argument("--s3logbucket", type=str, required=True,
+                        help="s3 log bucket name")
     return vars(parser.parse_args())
 
 
@@ -537,7 +542,8 @@ if not args["disable_cloudwatch"]:
         log_file = open(log_path, 'r+')
         log_file.seek(0, os.SEEK_END)
     thr = threading.Thread(target=cloudwatch_log,
-                           args=(log_path, args["idpath"], s3_bucket_region, s3_access_key_id, s3_access_key_secret))
+                           args=(args["cloudwatch_log_group"], log_path, args["idpath"], s3_bucket_region,
+                                 s3_access_key_id, s3_access_key_secret))
     thr.start()
 
 # Frequency (in seconds) of checking for new commands
