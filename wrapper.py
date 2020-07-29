@@ -530,12 +530,12 @@ node_id = get_node_id(args["idpath"])
 
 # If there is already a log file, open it here so we don't lose records
 log_file = None
-if os.path.isfile(log_path):
-    log_file = open(log_path, 'r+')
-    log_file.seek(0, os.SEEK_END)
 
 # Start the log backup service
 if not args["disable_cloudwatch"]:
+    if os.path.isfile(log_path):
+        log_file = open(log_path, 'r+')
+        log_file.seek(0, os.SEEK_END)
     thr = threading.Thread(target=cloudwatch_log,
                            args=(log_path, args["idpath"], s3_bucket_region, s3_access_key_id, s3_access_key_secret))
     thr.start()
