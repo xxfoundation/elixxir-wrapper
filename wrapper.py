@@ -464,8 +464,7 @@ def get_args():
                         help="Override for config file path", default="")
 
     # This is deprecated but cannot be deleted without a service file update
-    parser.add_argument("--s3logbucket", type=str, required=True,
-                        help="s3 log bucket name")
+    parser.add_argument("--s3logbucket", type=str, help="s3 log bucket name")
     return vars(parser.parse_args())
 
 
