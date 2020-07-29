@@ -27,8 +27,6 @@ import hashlib
 
 # FUNCTIONS --------------------------------------------------------------------
 
-last_line_time = time.time()
-
 
 def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_secret):
     """
@@ -47,6 +45,7 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
     cloudwatch_log_group = "xxnetwork-alphanet-logs-prod"  # Cloudwatch log group name
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
+    push_frequency = 1  # frequency of pushes to cloudwatch, in seconds
 
     # Event buffer and storage
     event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
@@ -62,7 +61,7 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
         event_buffer, log_events = process_line(event_buffer, log_events)
 
         # Send to cloudwatch if there are events
-        if time.time() - last_push_time > 1 and len(log_events) > 0:
+        if time.time() - last_push_time > push_frequency and len(log_events) > 0:
             upload_sequence_token = send(client, upload_sequence_token,
                                          log_events, log_stream_name, cloudwatch_log_group)
             log_events = []
@@ -76,7 +75,6 @@ def cloudwatch_log(log_file_path, id_path, region, access_key_id, access_key_sec
             # Clear out the log file
             log_file.close()
             log_file = open(log_file_path, "w+")
-            # Increment the log_index
             log.info("Log has been cleared. New Size: {}".format(
                 os.path.getsize(log_file_path)))
 
@@ -106,7 +104,7 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
                           aws_access_key_id=access_key_id,
                           aws_secret_access_key=access_key_secret)
 
-    log_prefix = ""
+    log_prefix = ""  # Prefix for log stream - should be ID based on file
     if read_node_id:
         log_prefix = read_node_id
     # Read node ID from the file
@@ -124,8 +122,8 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
         except Exception as error:
             log.error("Could not open node ID at {}: {}".format(id_path, error))
 
-    log_name = os.path.basename(log_file_path)
-    log_stream_name = "{}-{}".format(log_prefix, log_name)
+    log_name = os.path.basename(log_file_path)  # Name of the log file
+    log_stream_name = "{}-{}".format(log_prefix, log_name)  # Stream name should be {ID}-{node/gateway}.log
 
     try:
         # Determine if stream exists.  If not, make one.
@@ -133,8 +131,10 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
                                               logStreamNamePrefix=log_stream_name)['logStreams']
 
         if len(streams) == 0:
+            # Create a log stream on the fly if ours does not exist
             client.create_log_stream(logGroupName=cloudwatch_log_group, logStreamName=log_stream_name)
         else:
+            # If our log stream exists, we need to get the sequence token from this call to start sending to it again
             for s in streams:
                 if log_stream_name == s['logStreamName'] and 'uploadSequenceToken' in s.keys():
                     upload_sequence_token = s['uploadSequenceToken']
@@ -144,6 +144,10 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
         return
 
     return client, log_stream_name, upload_sequence_token
+
+
+# This is used exclusively in process_line, and needs to be stored across calls
+last_line_time = time.time()
 
 
 def process_line(event_buffer, log_events):
@@ -157,13 +161,16 @@ def process_line(event_buffer, log_events):
     """
     global last_line_time, log_file
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"]  # using these to deliniate the start of an event
+    # This controls how long we should wait after a line before assuming it's the end of an event
+    force_event_time = 0.5
 
     line = log_file.readline()
+    line_time = int(round(time.time() * 1000))  # Timestamp for this line
     # If no new line, wait 0.1s and try again
     if not line:
-        # if it's been more than 0.5s since last line, push to buffer
-        if time.time() - last_line_time > 0.5 and event_buffer != "":
-            log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
+        # if it's been more than force_event_time since last line, push to buffer
+        if time.time() - last_line_time > force_event_time and event_buffer != "":
+            log_events.append({'timestamp': line_time, 'message': event_buffer})
             event_buffer = ""
         time.sleep(0.1)
     last_line_time = time.time()
@@ -171,7 +178,7 @@ def process_line(event_buffer, log_events):
     # If we clearly have a new line, push buffer to events
     if line.split(' ')[0] in log_starters and event_buffer != "":
         # New event starting, push buffer to events
-        log_events.append({'timestamp': int(round(time.time() * 1000)), 'message': event_buffer})
+        log_events.append({'timestamp': line_time, 'message': event_buffer})
         event_buffer = ""
 
     event_buffer += line  # Log messages can be multi-line (ex: stack trace)
