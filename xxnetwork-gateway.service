@@ -2,6 +2,8 @@
 Description=Job that starts the Wrapper service
 StartLimitIntervalSec=5
 StartLimitBurst=10
+After=local-fs.target network-online.target network.target
+Wants=local-fs.target network-online.target network.target
 
 [Service]
 User=ubuntu
