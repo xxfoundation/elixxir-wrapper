@@ -113,14 +113,7 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
             log.error("No node file found, waiting for creation...")
             while not os.path.exists(id_path):
                 time.sleep(0.1)
-        try:
-            with open(id_path, 'r') as idfile:
-                new_node_id = json.loads(idfile.read().strip()).get("id", None)
-                if new_node_id:
-                    read_node_id = new_node_id
-                    log_prefix = new_node_id
-        except Exception as error:
-            log.error("Could not open node ID at {}: {}".format(id_path, error))
+        log_prefix = get_node_id(id_path)
 
     log_name = os.path.basename(log_file_path)  # Name of the log file
     log_stream_name = "{}-{}".format(log_prefix, log_name)  # Stream name should be {ID}-{node/gateway}.log
