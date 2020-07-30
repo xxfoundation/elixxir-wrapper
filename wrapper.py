@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
-#///////////////////////////////////////////////////////////////////////////////
-#// Copyright © 2020 xx network SEZC                                          //
-#//                                                                           //
-#// Use of this source code is governed by a license that can be found in the //
-#// LICENSE file                                                              //
-#///////////////////////////////////////////////////////////////////////////////
+# ///////////////////////////////////////////////////////////////////////////////
+# // Copyright © 2020 xx network SEZC                                          //
+# //                                                                           //
+# // Use of this source code is governed by a license that can be found in the //
+# // LICENSE file                                                              //
+# ///////////////////////////////////////////////////////////////////////////////
 
 # This script wraps the cMix binaries to provide system management
 
@@ -25,8 +25,198 @@ import boto3
 from OpenSSL import crypto
 import hashlib
 
-
 # FUNCTIONS --------------------------------------------------------------------
+
+
+def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret):
+    """
+    cloudwatch_log is intended to run in a thread.  It will monitor the file at
+    log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
+    stream, one will be created for it, named by node ID.
+
+    :param cloudwatch_log_group: log group name for cloudwatch logging
+    :param log_file_path: Path to the log file
+    :param id_path: path to node's id file
+    :param region: AWS region
+    :param access_key_id: aws access key
+    :param access_key_secret: aws secret key
+    """
+    global read_node_id, log_file
+    # Constants
+    megabyte = 1048576  # Size of one megabyte in bytes
+    max_size = 100 * megabyte  # Maximum log file size before truncation
+    push_frequency = 1  # frequency of pushes to cloudwatch, in seconds
+
+    # Event buffer and storage
+    event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
+    log_events = []  # Buffer of events from log not yet sent to cloudwatch
+
+    client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path, region,
+                                                                    cloudwatch_log_group, access_key_id,
+                                                                    access_key_secret)
+    if init_err:
+        log.error("Failed to init cloudwatch logging: {}".format(init_err))
+        return
+
+    log.info("Starting cloudwatch logging...")
+
+    last_push_time = time.time()
+    while True:
+        event_buffer, log_events = process_line(event_buffer, log_events)
+
+        # Send to cloudwatch if there are events
+        if time.time() - last_push_time > push_frequency and len(log_events) > 0:
+            upload_sequence_token = send(client, upload_sequence_token,
+                                         log_events, log_stream_name, cloudwatch_log_group)
+            log_events = []
+            last_push_time = time.time()
+
+        # Check if the log file is too large
+        log_size = os.path.getsize(log_file_path)
+        log.debug("Current Log Size: {}".format(log_size))
+        if log_size > max_size:
+            log.warning("Log has reached maximum size. Clearing...")
+            # Clear out the log file
+            log_file.close()
+            log_file = open(log_file_path, "w+")
+            log.info("Log has been cleared. New Size: {}".format(
+                os.path.getsize(log_file_path)))
+
+
+def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, access_key_secret):
+    """
+    Initialize client for cloudwatch logging
+    :param log_file_path: path to log output
+    :param id_path: path to id file
+    :param region: aws region
+    :param cloudwatch_log_group: cloudwatch log group name
+    :param access_key_id: AWS access key id
+    :param access_key_secret: AWS access key secret
+    :return client, log_stream_name, upload_sequence_token:
+    """
+    global log_file, read_node_id
+    upload_sequence_token = ""
+    if not log_file:
+        # Wait for log file to exist
+        while not os.path.isfile(log_file_path):
+            time.sleep(0.1)
+
+        log_file = open(log_file_path, 'r+')
+
+    # Setup cloudwatch logs client
+    client = boto3.client('logs', region_name=region,
+                          aws_access_key_id=access_key_id,
+                          aws_secret_access_key=access_key_secret)
+
+    log_prefix = ""  # Prefix for log stream - should be ID based on file
+    if read_node_id:
+        log_prefix = read_node_id
+    # Read node ID from the file
+    else:
+        if not os.path.exists(id_path):
+            log.error("No node file found, waiting for creation...")
+            while not os.path.exists(id_path):
+                time.sleep(0.1)
+        log_prefix = get_node_id(id_path)
+
+    log_name = os.path.basename(log_file_path)  # Name of the log file
+    log_stream_name = "{}-{}".format(log_prefix, log_name)  # Stream name should be {ID}-{node/gateway}.log
+
+    try:
+        # Determine if stream exists.  If not, make one.
+        streams = client.describe_log_streams(logGroupName=cloudwatch_log_group,
+                                              logStreamNamePrefix=log_stream_name)['logStreams']
+
+        if len(streams) == 0:
+            # Create a log stream on the fly if ours does not exist
+            client.create_log_stream(logGroupName=cloudwatch_log_group, logStreamName=log_stream_name)
+        else:
+            # If our log stream exists, we need to get the sequence token from this call to start sending to it again
+            for s in streams:
+                if log_stream_name == s['logStreamName'] and 'uploadSequenceToken' in s.keys():
+                    upload_sequence_token = s['uploadSequenceToken']
+
+    except Exception as e:
+        return None, None, None, e
+
+    return client, log_stream_name, upload_sequence_token, None
+
+
+# This is used exclusively in process_line, and needs to be stored across calls
+last_line_time = time.time()
+
+
+def process_line(event_buffer, log_events):
+    """
+    Accepts current buffer and log events from main loop
+    Processes one line of input, either adding an event or adding it to the buffer
+    New events are marked by a string in log_starters, or are separated by more than 0.5 seconds
+    :param event_buffer: string buffer of concatenated lines that make up a single event
+    :param log_events: current array of events
+    :return:
+    """
+    global last_line_time, log_file
+    log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"]  # using these to deliniate the start of an event
+    # This controls how long we should wait after a line before assuming it's the end of an event
+    force_event_time = 0.5
+
+    line = log_file.readline()
+    line_time = int(round(time.time() * 1000))  # Timestamp for this line
+    # If no new line, wait 0.1s and try again
+    if not line:
+        # if it's been more than force_event_time since last line, push to buffer
+        if time.time() - last_line_time > force_event_time and event_buffer != "":
+            log_events.append({'timestamp': line_time, 'message': event_buffer})
+            event_buffer = ""
+        time.sleep(0.1)
+    last_line_time = time.time()
+
+    # If we clearly have a new line, push buffer to events
+    if line.split(' ')[0] in log_starters and event_buffer != "":
+        # New event starting, push buffer to events
+        log_events.append({'timestamp': line_time, 'message': event_buffer})
+        event_buffer = ""
+
+    event_buffer += line  # Log messages can be multi-line (ex: stack trace)
+
+    return event_buffer, log_events
+
+
+def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_log_group):
+    """
+    send is a helper function for cloudwatch_log, used to push a batch of events to the proper stream
+    :param log_events: Log events to be sent to cloudwatch
+    :param log_stream_name: Name of cloudwatch log stream
+    :param cloudwatch_log_group: Name of cloudwatch log group
+    :param client: cloudwatch logs client
+    :param upload_sequence_token: sequence token for log stream
+    :return: new sequence token
+    """
+    if len(log_events) == 0:
+        return upload_sequence_token
+
+    try:
+        if upload_sequence_token == "":
+            # for the first message in a stream, there is no sequence token
+            resp = client.put_log_events(logGroupName=cloudwatch_log_group,
+                                         logStreamName=log_stream_name,
+                                         logEvents=log_events)
+        else:
+            resp = client.put_log_events(logGroupName=cloudwatch_log_group,
+                                         logStreamName=log_stream_name,
+                                         logEvents=log_events,
+                                         sequenceToken=upload_sequence_token)
+        upload_sequence_token = resp['nextSequenceToken']  # set the next sequence token
+
+        # IF anything was rejected, log as warning
+        if 'rejectedLogEventsInfo' in resp.keys():
+            log.warning("Some log events were rejected:")
+            log.warning(resp['rejectedLogEventsInfo'])
+
+        # reset events & current message size
+        return upload_sequence_token
+    except Exception as e:
+        log.error(e)
 
 
 def upload(src_path, dst_path, s3_bucket, region,
@@ -100,21 +290,21 @@ def download(src_path, dst_path, s3_bucket, region,
                   exc_info=True)
 
 
-def start_binary(bin_path, log_file, bin_args):
+def start_binary(bin_path, log_file_path, bin_args):
     """
     Starts the binary at the given path with the given args.
     Returns the newly-created subprocess.
 
     :param bin_path: Path to the binary
     :type bin_path: str
-    :param log_file: Path to the binary log file
-    :type log_file: str
+    :param log_file_path: Path to the binary log file
+    :type log_file_path: str
     :param bin_args: Arguments for the binary
     :type bin_args: list[str]
     :return: Newly-created subprocess
     :rtype: subprocess.Popen
     """
-    with open(log_file, "a") as err_out:
+    with open(log_file_path, "a") as err_out:
         p = subprocess.Popen([bin_path] + bin_args,
                              stdout=subprocess.DEVNULL,
                              stderr=err_out)
@@ -137,62 +327,6 @@ def terminate_process(p):
         p.terminate()
         log.info("Process {} terminated with exit code {}".
                  format(pid, p.wait()))
-
-
-def backup_log(src_path, id_path, s3_bucket, region,
-               access_key_id, access_key_secret):
-    """
-    Uploads the log file at the given path to the given S3 destination.
-    Clears local log file after a certain size threshold.
-    Run in a separate thread.
-
-    :param src_path: Path of the local file
-    :type src_path: str
-    :param id_path: Path to the node id which is used to get a unique prefix
-    :type id_path: str
-    :param region: Region of S3 bucket
-    :type region: str
-    :param s3_bucket: Name of S3 bucket
-    :type s3_bucket: str
-    :param access_key_id: Access key ID for bucket access
-    :type access_key_id: str
-    :param access_key_secret: Access key secret for bucket access
-    :type access_key_secret: str
-    :return: None
-    :rtype: None
-    """
-    megabyte = 1048576  # Size of one megabyte in bytes
-    max_size = 1 * megabyte
-    backup_frequency = 60  # Frequency (in seconds) of log backups
-    log_index = 0
-    log_name = os.path.basename(src_path)
-
-    while True:
-        # Sleep for backup_frequency seconds
-        time.sleep(backup_frequency)
-        log_prefix = get_node_id(id_path)
-        try:
-            # Back up the log file
-            upload(src_path, "{}-{}-{}".format(log_prefix, log_index, log_name),
-                   s3_bucket, region, access_key_id, access_key_secret)
-
-            # Get the size of the log file in bytes
-            log_size = os.path.getsize(src_path)
-            log.debug("Current Log Size: {}".format(log_size))
-
-            # Check if the log file is too large
-            if log_size > max_size:
-                log.warning("Log has reached maximum size. Clearing...")
-                # Clear out the log file
-                open(src_path, 'w').close()
-                # Increment the log_index
-                log_index += 1
-                log.info("Log has been cleared. New Size: {}".format(
-                    os.path.getsize(src_path)))
-
-        except Exception as error:
-            log.error("Unable to back up log file: {}".format(error),
-                      exc_info=True)
 
 
 # generated_uuid is a static cached UUID used as the node_id
@@ -311,11 +445,12 @@ def get_args():
                         help="Path to the s3 management directory")
     parser.add_argument("-m", "--s3managementbucket", type=str,
                         help="Path to the s3 management bucket name")
-    parser.add_argument("--disable-s3log", action="store_true",
-                        help="Disable uploading log files to s3",
+    parser.add_argument("--disable-cloudwatch", action="store_true",
+                        help="Disable uploading log events to cloudwatch",
                         default=False, required=False)
-    parser.add_argument("--s3logbucket", type=str, required=True,
-                        help="s3 log bucket name")
+    parser.add_argument("--cloudwatch-log-group", type=str,
+                        help="Log group for cloudwatch logging",
+                        default="xxnetwork-logs-prod")
     parser.add_argument("--s3accesskey", type=str, required=True,
                         help="s3 access key")
     parser.add_argument("--s3secret", type=str, required=True,
@@ -330,6 +465,9 @@ def get_args():
                         help="Path to recovered error path", default=None)
     parser.add_argument("--configoverride", type=str, required=False,
                         help="Override for config file path", default="")
+
+    # This is deprecated but cannot be deleted without a service file update
+    parser.add_argument("--s3logbucket", type=str, help="s3 log bucket name")
     return vars(parser.parse_args())
 
 
@@ -353,7 +491,6 @@ if not os.path.exists(rsa_certificate_path):  # check creds dir for file as well
     rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
                                                            "network_management.crt"))
 
-s3_log_bucket_name = args["s3logbucket"]
 s3_management_bucket_name = args["s3managementbucket"]
 s3_access_key_id = args["s3accesskey"]
 s3_access_key_secret = args["s3secret"]
@@ -398,11 +535,16 @@ process = None
 # Note this is done before the thread split to guarantee the same uuid.
 node_id = get_node_id(args["idpath"])
 
+# If there is already a log file, open it here so we don't lose records
+log_file = None
+
 # Start the log backup service
-if not args["disable_s3log"]:
-    thr = threading.Thread(target=backup_log,
-                           args=(log_path, args["idpath"],
-                                 s3_log_bucket_name, s3_bucket_region,
+if not args["disable_cloudwatch"]:
+    if os.path.isfile(log_path):
+        log_file = open(log_path, 'r+')
+        log_file.seek(0, os.SEEK_END)
+    thr = threading.Thread(target=cloudwatch_log,
+                           args=(args["cloudwatch_log_group"], log_path, args["idpath"], s3_bucket_region,
                                  s3_access_key_id, s3_access_key_secret))
     thr.start()
 
@@ -486,7 +628,7 @@ while True:
                     if process is None or process.poll() is not None:
                         if os.path.isfile(config_file):
                             process = start_binary(binary_path, log_path,
-                                       ["--config", config_file])
+                                                   ["--config", config_file])
                         else:
                             process = start_binary(binary_path, log_path, [])
 
