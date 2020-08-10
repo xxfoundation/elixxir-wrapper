@@ -493,9 +493,9 @@ valid_paths = {
     "binary": os.path.abspath(os.path.expanduser(binary_path)),
     "wrapper": os.path.abspath(sys.argv[0]),
     "cert": rsa_certificate_path,
-    "consensus_binary": args["consensus-binary"],
-    "consensus_config": args["consensus-config"],
-    "consensus_state": args["consensus-state"]
+    "consensus_binary": args["consensus_binary"],
+    "consensus_config": args["consensus_config"],
+    "consensus_state": args["consensus_state"]
 }
 
 # Record the most recent command timestamp
