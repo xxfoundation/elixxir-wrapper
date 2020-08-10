@@ -407,22 +407,22 @@ def get_args():
                         required=False, default="/opt/xxnetwork/bin/xxnetwork-consensus")
     parser.add_argument("--consensus-config", type=str,
                         help="Path to the consensus config file",
-                        required=False, default=os.path.expanduser("~/.xxnetwork/consensus.yaml"))
+                        required=False, default="/opt/xxnetwork/consensus.yaml")
     parser.add_argument("--consensus-state", type=str,
                         help="Path to the consensus state file",
-                        required=False, default=os.path.expanduser("~/.xxnetwork/consensus.gob"))
+                        required=False, default="/opt/xxnetwork/consensus.gob")
     parser.add_argument("-c", "--configdir", type=str, required=False,
                         help="Path to the config dir, e.g., ~/.xxnetwork/",
-                        default=os.path.expanduser("~/.xxnetwork"))
+                        default="/opt/xxnetwork/")
     parser.add_argument("-s", "--s3path", type=str, required=True,
                         help="Path to the s3 management directory")
     parser.add_argument("-m", "--s3managementbucket", type=str,
                         help="Path to the s3 management bucket name")
     parser.add_argument("--disable-cloudwatch", action="store_true",
-                        help="Disable uploading log events to cloudwatch",
+                        help="Disable uploading log events to CloudWatch",
                         default=False, required=False)
     parser.add_argument("--cloudwatch-log-group", type=str,
-                        help="Log group for cloudwatch logging",
+                        help="Log group for CloudWatch logging",
                         default="xxnetwork-logs-prod")
     parser.add_argument("--s3accesskey", type=str, required=True,
                         help="s3 access key")
