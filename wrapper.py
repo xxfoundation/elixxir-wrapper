@@ -404,7 +404,7 @@ def get_args():
                         required=True)
     parser.add_argument("--consensus-binary", type=str,
                         help="Path to the consensus binary",
-                        required=False, default="/bin/consensus")
+                        required=False, default="/opt/xxnetwork/bin/xxnetwork-consensus")
     parser.add_argument("--consensus-config", type=str,
                         help="Path to the consensus config file",
                         required=False, default=os.path.expanduser("~/.xxnetwork/consensus.yaml"))
