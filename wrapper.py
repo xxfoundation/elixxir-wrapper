@@ -108,7 +108,7 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
                           aws_access_key_id=access_key_id,
                           aws_secret_access_key=access_key_secret)
 
-    log_prefix = ""  # Prefix for log stream - should be ID based on file
+    # Define prefix for log stream - should be ID based on file
     if read_node_id:
         log_prefix = read_node_id
     # Read node ID from the file
@@ -217,42 +217,6 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
         return upload_sequence_token
     except Exception as e:
         log.error(e)
-
-
-def upload(src_path, dst_path, s3_bucket, region,
-           access_key_id, access_key_secret):
-    """
-    Uploads file at src_path to dst_path on s3_bucket using
-    the provided access_key_id and access_key_secret.
-
-    :param src_path: Path of the local file
-    :type src_path: str
-    :param dst_path: Path of the destination on S3 bucket
-    :type dst_path: str
-    :param s3_bucket: Name of S3 bucket
-    :type s3_bucket: str
-    :param region: Region of S3 bucket
-    :type region: str
-    :param access_key_id: Access key ID for bucket access
-    :type access_key_id: str
-    :param access_key_secret: Access key secret for bucket access
-    :type access_key_secret: str
-    :return: None
-    :rtype: None
-    """
-    try:
-        upload_data = open(src_path, 'rb')
-        s3 = boto3.Session(
-            aws_access_key_id=access_key_id,
-            aws_secret_access_key=access_key_secret,
-            region_name=region).resource("s3")
-        s3.Bucket(s3_bucket).put_object(Key=dst_path, Body=upload_data.read())
-        log.debug("Successfully uploaded to {}/{} from {}".format(s3_bucket,
-                                                                  dst_path,
-                                                                  src_path))
-    except Exception as error:
-        log.error("Unable to upload {} to S3: {}".format(src_path, error),
-                  exc_info=True)
 
 
 def download(src_path, dst_path, s3_bucket, region,
@@ -438,6 +402,15 @@ def get_args():
     parser.add_argument("-b", "--binary", type=str,
                         help="Path to the binary",
                         required=True)
+    parser.add_argument("--consensus-binary", type=str,
+                        help="Path to the consensus binary",
+                        required=False, default="/bin/consensus")
+    parser.add_argument("--consensus-config", type=str,
+                        help="Path to the consensus config file",
+                        required=False, default=os.path.expanduser("~/.xxnetwork/consensus.yaml"))
+    parser.add_argument("--consensus-state", type=str,
+                        help="Path to the consensus state file",
+                        required=False, default=os.path.expanduser("~/.xxnetwork/consensus.gob"))
     parser.add_argument("-c", "--configdir", type=str, required=False,
                         help="Path to the config dir, e.g., ~/.xxnetwork/",
                         default=os.path.expanduser("~/.xxnetwork"))
@@ -519,8 +492,10 @@ if os.path.isfile(config_override):
 valid_paths = {
     "binary": os.path.abspath(os.path.expanduser(binary_path)),
     "wrapper": os.path.abspath(sys.argv[0]),
-    "config": config_file,
-    "cert": rsa_certificate_path
+    "cert": rsa_certificate_path,
+    "consensus_binary": args["consensus-binary"],
+    "consensus_config": args["consensus-config"],
+    "consensus_state": args["consensus-state"]
 }
 
 # Record the most recent command timestamp
@@ -689,9 +664,13 @@ while True:
                         timestamps[i] = timestamp
                         continue
 
-                    # Handle binary install
-                    if install_path == valid_paths["binary"]:
+                    # Handle binary installs
+                    if install_path == valid_paths["binary"] or install_path == valid_paths["consensus_binary"]:
                         os.chmod(install_path, stat.S_IEXEC)
+
+                    # Handle configuration installs
+                    if install_path == valid_paths["consensus_config"] or install_path == valid_paths["consensus_state"]:
+                        os.chmod(install_path, stat.S_IREAD)
 
                     # Handle Wrapper install
                     if install_path == valid_paths["wrapper"]:
