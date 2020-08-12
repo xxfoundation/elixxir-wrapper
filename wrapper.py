@@ -659,7 +659,7 @@ while True:
 
                     # Verify valid install path
                     if target not in valid_paths.keys():
-                        log.error("Invalid install path: {}. Expected one of: {}".format(
+                        log.error("Invalid update target: {}. Expected one of: {}".format(
                             target, valid_paths.values()))
                         timestamps[i] = timestamp
                         continue
