@@ -400,8 +400,11 @@ def get_args():
                         help="Node ID path, e.g. /opt/xxnetwork/logs/nodeIDF.json",
                         required=False)
     parser.add_argument("-b", "--binary", type=str,
-                        help="Path to the binary",
+                        help="Path of the binary to be run by the wrapper",
                         required=True)
+    parser.add_argument("--disable-consensus", action="store_true",
+                        help="Disable consensus binary",
+                        default=False, required=False)
     parser.add_argument("--consensus-binary", type=str,
                         help="Path to the consensus binary",
                         required=False, default="/opt/xxnetwork/bin/xxnetwork-consensus")
@@ -502,8 +505,10 @@ valid_paths = {
 # to avoid executing duplicate commands
 timestamps = [0, time.time()]
 
-# Globally keep track of the process being wrapped
+# Globally keep track of the main process being wrapped
 process = None
+# Globally keep track of the consensus process
+consensus_process = None
 
 # CONTROL FLOW -----------------------------------------------------------------
 
@@ -549,28 +554,31 @@ while True:
 
     for i, remote_path in enumerate(remotes_paths):
         try:
-            # Obtain the latest management instructions
+            # Obtain the latest command file
             local_path = "{}/{}".format(tmp_dir, os.path.basename(remote_path))
             download(remote_path, local_path,
                      s3_management_bucket_name, s3_bucket_region,
                      s3_access_key_id, s3_access_key_secret)
 
-            # Load the management instructions into JSON
+            # Load the command file into JSON
             with open(local_path, 'r') as cmd_file:
+
+                # Verify the command file signature
                 signed_commands, ok = verify_cmd(cmd_file, rsa_certificate_path)
                 if signed_commands is None:
                     log.error("Empty command file: {}".format(local_path))
                     save_cmd(local_path, cmd_log_dir, False, time.time())
                     continue
 
+                # Handle invalid signature
                 if not ok:
                     log.error("Failed to verify signature for {}!".format(
                         local_path), exc_info=True)
                     save_cmd(local_path, cmd_log_dir, ok, time.time())
                     continue
 
-            timestamp = signed_commands.get("timestamp", 0)
             # Save the command into a log
+            timestamp = signed_commands.get("timestamp", 0)
             save_cmd(local_path, cmd_log_dir, ok, timestamp)
 
             # If the commands occurred before the script, skip
@@ -586,6 +594,7 @@ while True:
 
             # Execute the commands in sequence
             for command in signed_commands.get("commands", list()):
+
                 # If the command does not apply to us, note that and move on
                 if "nodes" in command:
                     node_targets = command.get("nodes", list())
@@ -594,23 +603,36 @@ while True:
                         timestamps[i] = timestamp
                         continue
 
+                # Command applies, so obtain command information
                 command_type = command.get("command", "")
+                target = command.get("target", "")
                 info = command.get("info", dict())
-
                 log.info("Executing command: {}".format(command))
+
+                # START COMMAND ===========================
                 if command_type == "start":
-                    # If the process is not running, start it
-                    if process is None or process.poll() is not None:
+                    # Decide which type of binary to start
+                    start_path = valid_paths[target]
+                    if target == "binary" and (process is None or process.poll() is not None):
+                        # Decide whether a config file argument need be specified
                         if os.path.isfile(config_file):
-                            process = start_binary(binary_path, log_path,
+                            process = start_binary(start_path, log_path,
                                                    ["--config", config_file])
                         else:
-                            process = start_binary(binary_path, log_path, [])
+                            process = start_binary(start_path, log_path, [])
+                    elif not args["disable_cloudwatch"] and target == "consensus_binary" and \
+                            (consensus_process is None or consensus_process.poll() is not None):
+                        consensus_process = start_binary(start_path, log_path, [])
 
+                # STOP COMMAND ===========================
                 elif command_type == "stop":
                     # Stop the wrapped process
-                    terminate_process(process)
+                    if target == "binary":
+                        terminate_process(process)
+                    elif target == "consensus_binary":
+                        terminate_process(consensus_process)
 
+                # DELAY COMMAND ===========================
                 elif command_type == "delay":
                     # Delay for the given amount of time
                     # NOTE: Provided in MS, converted to seconds
@@ -618,33 +640,41 @@ while True:
                     log.info("Delaying for {}ms...".format(duration))
                     time.sleep(duration / 1000)
 
+                # UPDATE COMMAND ===========================
                 elif command_type == "update":
+
+                    # Handle disabled updates flag
                     if args["disableupdates"]:
                         log.error("Update command ignored, updates disabled!")
                         timestamps[i] = timestamp
                         continue
 
-                    # Verify valid install path
-                    install_path = info.get("install_path", "")
-                    if install_path not in valid_paths.keys():
-                        log.error("Invalid install path: {}. Expected one of: {}".format(
-                            install_path, valid_paths.values()))
+                    # Handle disabled consensus flag
+                    if target == "consensus_binary" and not args["disable_cloudwatch"]:
+                        log.error("Update command ignored, consensus disabled!")
                         timestamps[i] = timestamp
                         continue
-                    install_path = valid_paths[install_path]
 
-                    # Update the local binary with the remote binary
-                    update_path = "{}/{}".format(management_directory,
-                                                 info.get("path", ""))
-                    log.info("Updating file at {} to {}...".format(
-                        update_path, install_path))
+                    # Verify valid install path
+                    if target not in valid_paths.keys():
+                        log.error("Invalid install path: {}. Expected one of: {}".format(
+                            target, valid_paths.values()))
+                        timestamps[i] = timestamp
+                        continue
+
+                    # Obtain pathing information
+                    install_path = valid_paths[target]
+                    update_path = "{}/{}".format(management_directory, info.get("path", ""))
+                    log.info("Updating file at {} to {}...".format(update_path, install_path))
+
+                    # Make directories and download file to temporary location
                     os.makedirs(os.path.dirname(install_path), exist_ok=True)
                     tmp_path = install_path + ".tmp"
                     download(update_path, tmp_path,
                              s3_management_bucket_name, s3_bucket_region,
                              s3_access_key_id, s3_access_key_secret)
 
-                    # If the hash matches, overwrite to binary_path
+                    # Ensure the hash of the downloaded file matches the command
                     update_bytes = bytes(open(tmp_path, 'rb').read())
                     actual_hash = hashlib.sha256(update_bytes).hexdigest()
                     expected_hash = info.get("sha256sum", "")
@@ -654,8 +684,7 @@ while True:
                         timestamps[i] = timestamp
                         continue
 
-                    # Move the file into place, overwriting anything
-                    # that's there.
+                    # Move the file into place, overwriting anything that's there.
                     try:
                         os.replace(tmp_path, install_path)
                     except Exception as err:
@@ -664,19 +693,20 @@ while True:
                         timestamps[i] = timestamp
                         continue
 
-                    # Handle binary installs
-                    if install_path == valid_paths["binary"] or install_path == valid_paths["consensus_binary"]:
+                    # Handle binary updates
+                    if target == "binary" or target == "consensus_binary":
                         os.chmod(install_path, stat.S_IEXEC)
 
-                    # Handle configuration installs
-                    if install_path == valid_paths["consensus_config"] or install_path == valid_paths["consensus_state"]:
+                    # Handle configuration updates
+                    if target == "consensus_config" or target == "consensus_state":
                         os.chmod(install_path, stat.S_IREAD)
 
-                    # Handle Wrapper install
-                    if install_path == valid_paths["wrapper"]:
+                    # Handle Wrapper updates
+                    if target == "wrapper":
                         os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
                         log.info("Wrapper script updated, exiting now...")
                         os._exit(0)
+
                 log.info("Completed command: {}".format(command))
 
             # Update the timestamp in order to avoid repetition
