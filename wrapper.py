@@ -536,14 +536,16 @@ log.info("Script initialized at {}".format(time.time()))
 while True:
     time.sleep(command_frequency)
 
-    # If there is a recovered error file present, restart the server
+    # If there is a recovered error file present, restart the main process
     if err_output_path and os.path.isfile(err_output_path):
-        time.sleep(10)
         log.warning("Restarting binary due to error...")
+        time.sleep(10)
         try:
+            # Terminate the process if it still exists
             if not (process is None or process.poll() is not None):
-                process.terminate()
+                terminate_process(process)
 
+            # Restart the main process
             if os.path.isfile(config_file):
                 process = start_binary(binary_path, log_path,
                                        ["--config", config_file])
