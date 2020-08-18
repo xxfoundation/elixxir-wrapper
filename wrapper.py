@@ -22,6 +22,7 @@ import threading
 import time
 import uuid
 import boto3
+import botocore.exceptions
 from OpenSSL import crypto
 import hashlib
 
@@ -46,10 +47,12 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
     push_frequency = 1  # frequency of pushes to cloudwatch, in seconds
+    max_send_size = megabyte / 4
 
     # Event buffer and storage
     event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
     log_events = []  # Buffer of events from log not yet sent to cloudwatch
+    events_size = 0
 
     client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path, region,
                                                                     cloudwatch_log_group, access_key_id,
@@ -62,21 +65,27 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
 
     last_push_time = time.time()
     while True:
-        event_buffer, log_events = process_line(event_buffer, log_events)
+        event_buffer, log_events, events_size = process_line(event_buffer, log_events, events_size)
 
-        # Send to cloudwatch if there are events
-        if time.time() - last_push_time > push_frequency and len(log_events) > 0:
+        # Check if we should send events to cloudwatch
+        max_size_exceeded = len(bytes(event_buffer)) + 26 + events_size > max_send_size
+        push_time = time.time() - last_push_time > push_frequency
+
+        if (max_size_exceeded or push_time) and len(log_events) > 0:
+            # Send to cloudwatch, then reset events, size and push time
             upload_sequence_token = send(client, upload_sequence_token,
                                          log_events, log_stream_name, cloudwatch_log_group)
+            events_size = 0
             log_events = []
             last_push_time = time.time()
 
         # Check if the log file is too large
         log_size = os.path.getsize(log_file_path)
         log.debug("Current Log Size: {}".format(log_size))
+
         if log_size > max_size:
+            # Clear the log file
             log.warning("Log has reached maximum size. Clearing...")
-            # Clear out the log file
             log_file.close()
             log_file = open(log_file_path, "w+")
             log.info("Log has been cleared. New Size: {}".format(
@@ -113,10 +122,9 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
         log_prefix = read_node_id
     # Read node ID from the file
     else:
-        if not os.path.exists(id_path):
-            log.error("No node file found, waiting for creation...")
-            while not os.path.exists(id_path):
-                time.sleep(0.1)
+        log.info("Waiting for identity file...")
+        while not os.path.exists(id_path):
+            time.sleep(0.1)
         log_prefix = get_node_id(id_path)
 
     log_name = os.path.basename(log_file_path)  # Name of the log file
@@ -146,11 +154,12 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
 last_line_time = time.time()
 
 
-def process_line(event_buffer, log_events):
+def process_line(event_buffer, log_events, events_size):
     """
     Accepts current buffer and log events from main loop
     Processes one line of input, either adding an event or adding it to the buffer
     New events are marked by a string in log_starters, or are separated by more than 0.5 seconds
+    :param events_size: message size for log events per aws docs
     :param event_buffer: string buffer of concatenated lines that make up a single event
     :param log_events: current array of events
     :return:
@@ -162,24 +171,28 @@ def process_line(event_buffer, log_events):
 
     line = log_file.readline()
     line_time = int(round(time.time() * 1000))  # Timestamp for this line
-    # If no new line, wait 0.1s and try again
-    if not line:
-        # if it's been more than force_event_time since last line, push to buffer
-        if time.time() - last_line_time > force_event_time and event_buffer != "":
-            log_events.append({'timestamp': line_time, 'message': event_buffer})
-            event_buffer = ""
-        time.sleep(0.1)
-    last_line_time = time.time()
 
-    # If we clearly have a new line, push buffer to events
-    if line.split(' ')[0] in log_starters and event_buffer != "":
-        # New event starting, push buffer to events
+    if not line:
+        # if it's been more than force_event_time since last line, push buffer to events
+        push_buffer = time.time() - last_line_time > force_event_time and event_buffer != ""
+    else:
+        # Reset last line time
+        last_line_time = time.time()
+        # If a new event is starting, push buffer to events
+        push_buffer = line.split(' ')[0] in log_starters and event_buffer != ""
+
+    if push_buffer:
+        # Push the buffer into events
+        size = len(bytes(event_buffer))
         log_events.append({'timestamp': line_time, 'message': event_buffer})
         event_buffer = ""
+        events_size += (size + 26)  # Increment buffer size by message len + 26 (per aws documentation)
 
-    event_buffer += line  # Log messages can be multi-line (ex: stack trace)
+    if line:
+        # Push line on to the buffer
+        event_buffer += line
 
-    return event_buffer, log_events
+    return event_buffer, log_events, events_size
 
 
 def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_log_group):
@@ -213,10 +226,13 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
             log.warning("Some log events were rejected:")
             log.warning(resp['rejectedLogEventsInfo'])
 
-        # reset events & current message size
-        return upload_sequence_token
+    except botocore.exceptions.ClientError as e:
+        log.error("Boto3 client error encountered: %s" % e)
     except Exception as e:
         log.error(e)
+    finally:
+        # Always return upload sequence token - dropping this causes lots of errors
+        return upload_sequence_token
 
 
 def download(src_path, dst_path, s3_bucket, region,
