@@ -68,7 +68,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
         event_buffer, log_events, events_size = process_line(event_buffer, log_events, events_size)
 
         # Check if we should send events to cloudwatch
-        max_size_exceeded = len(bytes(event_buffer)) + 26 + events_size > max_send_size
+        max_size_exceeded = len(event_buffer.encode(encoding='utf-8')) + 26 + events_size > max_send_size
         push_time = time.time() - last_push_time > push_frequency
 
         if (max_size_exceeded or push_time) and len(log_events) > 0:
@@ -183,7 +183,7 @@ def process_line(event_buffer, log_events, events_size):
 
     if push_buffer:
         # Push the buffer into events
-        size = len(bytes(event_buffer))
+        size = len(event_buffer.encode(encoding='utf-8'))
         log_events.append({'timestamp': line_time, 'message': event_buffer})
         event_buffer = ""
         events_size += (size + 26)  # Increment buffer size by message len + 26 (per aws documentation)
