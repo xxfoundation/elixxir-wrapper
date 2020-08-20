@@ -179,7 +179,7 @@ def process_line(event_buffer, log_events, events_size):
 
     # Check the potential size, if over max, we should force a new event
     potential_buffer = event_buffer + line
-    is_event_too_big = len(potential_buffer.encode(encoding='utf-8')) < maximum_event_size
+    is_event_too_big = len(potential_buffer.encode(encoding='utf-8')) > maximum_event_size
 
     if not line:
         # if it's been more than force_event_time since last line, push buffer to events
