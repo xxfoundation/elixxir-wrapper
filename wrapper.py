@@ -166,14 +166,18 @@ def process_line(event_buffer, log_events, events_size):
     :return:
     """
     global last_line_time, log_file
-    log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"]  # using these to deliniate the start of an event
+    # using these to deliniate the start of an event
+    log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL", "TRACE"]
+
     # This controls how long we should wait after a line before assuming it's the end of an event
     force_event_time = 0.5
     maximum_event_size = 262144
 
+    # Get a line and mark the time it's read
     line = log_file.readline()
     line_time = int(round(time.time() * 1000))  # Timestamp for this line
 
+    # Check the potential size, if over max, we should force a new event
     potential_buffer = event_buffer + line
     is_event_too_big = len(potential_buffer.encode(encoding='utf-8')) < maximum_event_size
 
