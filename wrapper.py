@@ -47,7 +47,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
     push_frequency = 1  # frequency of pushes to cloudwatch, in seconds
-    max_send_size = megabyte / 4
+    max_send_size = megabyte
 
     # Event buffer and storage
     event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
@@ -68,10 +68,11 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
         event_buffer, log_events, events_size = process_line(event_buffer, log_events, events_size)
 
         # Check if we should send events to cloudwatch
-        max_size_exceeded = len(event_buffer.encode(encoding='utf-8')) + 26 + events_size > max_send_size
-        push_time = time.time() - last_push_time > push_frequency
+        log_event_size = 26
+        is_over_max_size = len(event_buffer.encode(encoding='utf-8')) + log_event_size + events_size > max_send_size
+        is_time_to_push = time.time() - last_push_time > push_frequency
 
-        if (max_size_exceeded or push_time) and len(log_events) > 0:
+        if (is_over_max_size or is_time_to_push) and len(log_events) > 0:
             # Send to cloudwatch, then reset events, size and push time
             upload_sequence_token = send(client, upload_sequence_token,
                                          log_events, log_stream_name, cloudwatch_log_group)
@@ -122,7 +123,7 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
         log_prefix = read_node_id
     # Read node ID from the file
     else:
-        log.info("Waiting for identity file...")
+        log.info("Waiting for ID file...")
         while not os.path.exists(id_path):
             time.sleep(0.1)
         log_prefix = get_node_id(id_path)
@@ -168,20 +169,24 @@ def process_line(event_buffer, log_events, events_size):
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL"]  # using these to deliniate the start of an event
     # This controls how long we should wait after a line before assuming it's the end of an event
     force_event_time = 0.5
+    maximum_event_size = 262144
 
     line = log_file.readline()
     line_time = int(round(time.time() * 1000))  # Timestamp for this line
 
+    potential_buffer = event_buffer + line
+    is_event_too_big = len(potential_buffer.encode(encoding='utf-8')) < maximum_event_size
+
     if not line:
         # if it's been more than force_event_time since last line, push buffer to events
-        push_buffer = time.time() - last_line_time > force_event_time and event_buffer != ""
+        is_new_line = time.time() - last_line_time > force_event_time and event_buffer != ""
     else:
         # Reset last line time
         last_line_time = time.time()
         # If a new event is starting, push buffer to events
-        push_buffer = line.split(' ')[0] in log_starters and event_buffer != ""
+        is_new_line = line.split(' ')[0] in log_starters and event_buffer != ""
 
-    if push_buffer:
+    if is_new_line or is_event_too_big:
         # Push the buffer into events
         size = len(event_buffer.encode(encoding='utf-8'))
         log_events.append({'timestamp': line_time, 'message': event_buffer})
