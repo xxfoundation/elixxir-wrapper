@@ -663,7 +663,7 @@ while True:
                         continue
 
                     # Handle disabled consensus flag
-                    if target == Targets.CONSENSUS_BINARY and not args["disable_consensus"]:
+                    if target == Targets.CONSENSUS_BINARY and args["disable_consensus"]:
                         log.error("Update command ignored, consensus disabled!")
                         timestamps[i] = timestamp
                         continue
