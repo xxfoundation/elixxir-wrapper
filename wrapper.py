@@ -315,8 +315,8 @@ def get_node_id(id_path):
     # Read it from the file
     try:
         if os.path.exists(id_path):
-            with open(id_path, 'r') as idfile:
-                new_node_id = json.loads(idfile.read().strip()).get("id", None)
+            with open(id_path, 'r') as id_file:
+                new_node_id = json.loads(id_file.read().strip()).get("id", None)
                 if new_node_id:
                     read_node_id = new_node_id
                     return new_node_id
@@ -330,12 +330,12 @@ def get_node_id(id_path):
     return generated_uuid
 
 
-def verify_cmd(inbuf, public_key_path):
+def verify_cmd(in_buf, public_key_path):
     """
     verify_cmd checks the command signature against the network certificate. 
 
-    :param inbuf: the command file buffer
-    :type inbuf: file object
+    :param in_buf: the command file buffer
+    :type in_buf: file object
     :param public_key_path: The path to the network public key certificate
     :type public_key_path: str
     :return: The json dict for the command, and if the signature worked or not
@@ -346,11 +346,11 @@ def verify_cmd(inbuf, public_key_path):
         command_json = None
         try:
             key = crypto.load_certificate(crypto.FILETYPE_PEM, file.read())
-            command = inbuf.readline().strip()
-            command_json = json.loads(command)
-            sig_json = json.loads(inbuf.readline())
+            cmd = in_buf.readline().strip()
+            command_json = json.loads(cmd)
+            sig_json = json.loads(in_buf.readline())
             signature = base64.b64decode(sig_json.get('signature'))
-            crypto.verify(key, signature, bytes(command, 'utf-8'), 'sha256')
+            crypto.verify(key, signature, bytes(cmd, 'utf-8'), 'sha256')
             return command_json, True
         except Exception as error:
             log.error("Unable to verify command: {}".format(error))
@@ -400,8 +400,11 @@ def get_args():
                         help="Node ID path, e.g. /opt/xxnetwork/logs/nodeIDF.json",
                         required=False)
     parser.add_argument("-b", "--binary", type=str,
-                        help="Path to the binary",
+                        help="Path of the binary to be run by the wrapper",
                         required=True)
+    parser.add_argument("--disable-consensus", action="store_true",
+                        help="Disable consensus binary",
+                        default=False, required=False)
     parser.add_argument("--consensus-binary", type=str,
                         help="Path to the consensus binary",
                         required=False, default="/opt/xxnetwork/bin/xxnetwork-consensus")
@@ -483,27 +486,39 @@ cmd_log_dir = args["cmdlogdir"]
 config_file = os.path.expanduser(os.path.join(
     args["configdir"], os.path.basename(binary_path) + ".yaml"))
 config_override = os.path.abspath(args["configoverride"])
-
 if os.path.isfile(config_override):
     config_file = config_override
+
+
+# Define possible local targets for commands
+class Targets:
+    BINARY = 'binary'
+    WRAPPER = 'wrapper'
+    CERT = 'cert'
+    CONSENSUS_BINARY = 'consensus_binary'
+    CONSENSUS_CONFIG = 'consensus_config'
+    CONSENSUS_STATE = 'consensus_state'
+
 
 # The valid "install" paths we can write to, with their local paths for
 # this machine
 valid_paths = {
-    "binary": os.path.abspath(os.path.expanduser(binary_path)),
-    "wrapper": os.path.abspath(sys.argv[0]),
-    "cert": rsa_certificate_path,
-    "consensus_binary": args["consensus_binary"],
-    "consensus_config": args["consensus_config"],
-    "consensus_state": args["consensus_state"]
+    Targets.BINARY: os.path.abspath(os.path.expanduser(binary_path)),
+    Targets.WRAPPER: os.path.abspath(sys.argv[0]),
+    Targets.CERT: rsa_certificate_path,
+    Targets.CONSENSUS_BINARY: args["consensus_binary"],
+    Targets.CONSENSUS_CONFIG: args["consensus_config"],
+    Targets.CONSENSUS_STATE: args["consensus_state"]
 }
 
 # Record the most recent command timestamp
 # to avoid executing duplicate commands
 timestamps = [0, time.time()]
 
-# Globally keep track of the process being wrapped
+# Globally keep track of the main process being wrapped
 process = None
+# Globally keep track of the consensus process
+consensus_process = None
 
 # CONTROL FLOW -----------------------------------------------------------------
 
@@ -519,7 +534,8 @@ if not args["disable_cloudwatch"]:
         log_file = open(log_path, 'r+')
         log_file.seek(0, os.SEEK_END)
     thr = threading.Thread(target=cloudwatch_log,
-                           args=(args["cloudwatch_log_group"], log_path, args["idpath"], s3_bucket_region,
+                           args=(args["cloudwatch_log_group"], log_path,
+                                 args["idpath"], s3_bucket_region,
                                  s3_access_key_id, s3_access_key_secret))
     thr.start()
 
@@ -531,14 +547,16 @@ log.info("Script initialized at {}".format(time.time()))
 while True:
     time.sleep(command_frequency)
 
-    # If there is a recovered error file present, restart the server
+    # If there is a recovered error file present, restart the main process
     if err_output_path and os.path.isfile(err_output_path):
-        time.sleep(10)
         log.warning("Restarting binary due to error...")
+        time.sleep(10)
         try:
+            # Terminate the process if it still exists
             if not (process is None or process.poll() is not None):
-                process.terminate()
+                terminate_process(process)
 
+            # Restart the main process
             if os.path.isfile(config_file):
                 process = start_binary(binary_path, log_path,
                                        ["--config", config_file])
@@ -549,28 +567,31 @@ while True:
 
     for i, remote_path in enumerate(remotes_paths):
         try:
-            # Obtain the latest management instructions
+            # Obtain the latest command file
             local_path = "{}/{}".format(tmp_dir, os.path.basename(remote_path))
             download(remote_path, local_path,
                      s3_management_bucket_name, s3_bucket_region,
                      s3_access_key_id, s3_access_key_secret)
 
-            # Load the management instructions into JSON
+            # Load the command file into JSON
             with open(local_path, 'r') as cmd_file:
+
+                # Verify the command file signature
                 signed_commands, ok = verify_cmd(cmd_file, rsa_certificate_path)
                 if signed_commands is None:
                     log.error("Empty command file: {}".format(local_path))
                     save_cmd(local_path, cmd_log_dir, False, time.time())
                     continue
 
+                # Handle invalid signature
                 if not ok:
                     log.error("Failed to verify signature for {}!".format(
                         local_path), exc_info=True)
                     save_cmd(local_path, cmd_log_dir, ok, time.time())
                     continue
 
-            timestamp = signed_commands.get("timestamp", 0)
             # Save the command into a log
+            timestamp = signed_commands.get("timestamp", 0)
             save_cmd(local_path, cmd_log_dir, ok, timestamp)
 
             # If the commands occurred before the script, skip
@@ -586,6 +607,7 @@ while True:
 
             # Execute the commands in sequence
             for command in signed_commands.get("commands", list()):
+
                 # If the command does not apply to us, note that and move on
                 if "nodes" in command:
                     node_targets = command.get("nodes", list())
@@ -594,23 +616,36 @@ while True:
                         timestamps[i] = timestamp
                         continue
 
+                # Command applies, so obtain command information
                 command_type = command.get("command", "")
+                target = command.get("target", "")
                 info = command.get("info", dict())
-
                 log.info("Executing command: {}".format(command))
+
+                # START COMMAND ===========================
                 if command_type == "start":
-                    # If the process is not running, start it
-                    if process is None or process.poll() is not None:
+                    # Decide which type of binary to start
+                    start_path = valid_paths[target]
+                    if target == Targets.BINARY and (process is None or process.poll() is not None):
+                        # Decide whether a config file argument need be specified
                         if os.path.isfile(config_file):
-                            process = start_binary(binary_path, log_path,
+                            process = start_binary(start_path, log_path,
                                                    ["--config", config_file])
                         else:
-                            process = start_binary(binary_path, log_path, [])
+                            process = start_binary(start_path, log_path, [])
+                    elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
+                            (consensus_process is None or consensus_process.poll() is not None):
+                        consensus_process = start_binary(start_path, log_path, [])
 
+                # STOP COMMAND ===========================
                 elif command_type == "stop":
                     # Stop the wrapped process
-                    terminate_process(process)
+                    if target == Targets.BINARY:
+                        terminate_process(process)
+                    elif target == Targets.CONSENSUS_BINARY:
+                        terminate_process(consensus_process)
 
+                # DELAY COMMAND ===========================
                 elif command_type == "delay":
                     # Delay for the given amount of time
                     # NOTE: Provided in MS, converted to seconds
@@ -618,33 +653,41 @@ while True:
                     log.info("Delaying for {}ms...".format(duration))
                     time.sleep(duration / 1000)
 
+                # UPDATE COMMAND ===========================
                 elif command_type == "update":
+
+                    # Handle disabled updates flag
                     if args["disableupdates"]:
                         log.error("Update command ignored, updates disabled!")
                         timestamps[i] = timestamp
                         continue
 
-                    # Verify valid install path
-                    install_path = info.get("install_path", "")
-                    if install_path not in valid_paths.keys():
-                        log.error("Invalid install path: {}. Expected one of: {}".format(
-                            install_path, valid_paths.values()))
+                    # Handle disabled consensus flag
+                    if target == Targets.CONSENSUS_BINARY and args["disable_consensus"]:
+                        log.error("Update command ignored, consensus disabled!")
                         timestamps[i] = timestamp
                         continue
-                    install_path = valid_paths[install_path]
 
-                    # Update the local binary with the remote binary
-                    update_path = "{}/{}".format(management_directory,
-                                                 info.get("path", ""))
-                    log.info("Updating file at {} to {}...".format(
-                        update_path, install_path))
+                    # Verify valid install path
+                    if target not in valid_paths.keys():
+                        log.error("Invalid update target: {}. Expected one of: {}".format(
+                            target, valid_paths.values()))
+                        timestamps[i] = timestamp
+                        continue
+
+                    # Obtain pathing information
+                    install_path = valid_paths[target]
+                    update_path = "{}/{}".format(management_directory, info.get("path", ""))
+                    log.info("Updating file at {} to {}...".format(update_path, install_path))
+
+                    # Make directories and download file to temporary location
                     os.makedirs(os.path.dirname(install_path), exist_ok=True)
                     tmp_path = install_path + ".tmp"
                     download(update_path, tmp_path,
                              s3_management_bucket_name, s3_bucket_region,
                              s3_access_key_id, s3_access_key_secret)
 
-                    # If the hash matches, overwrite to binary_path
+                    # Ensure the hash of the downloaded file matches the command
                     update_bytes = bytes(open(tmp_path, 'rb').read())
                     actual_hash = hashlib.sha256(update_bytes).hexdigest()
                     expected_hash = info.get("sha256sum", "")
@@ -654,8 +697,7 @@ while True:
                         timestamps[i] = timestamp
                         continue
 
-                    # Move the file into place, overwriting anything
-                    # that's there.
+                    # Move the file into place, overwriting anything that's there.
                     try:
                         os.replace(tmp_path, install_path)
                     except Exception as err:
@@ -664,19 +706,20 @@ while True:
                         timestamps[i] = timestamp
                         continue
 
-                    # Handle binary installs
-                    if install_path == valid_paths["binary"] or install_path == valid_paths["consensus_binary"]:
+                    # Handle binary updates
+                    if target == Targets.BINARY or target == Targets.CONSENSUS_BINARY:
                         os.chmod(install_path, stat.S_IEXEC)
 
-                    # Handle configuration installs
-                    if install_path == valid_paths["consensus_config"] or install_path == valid_paths["consensus_state"]:
+                    # Handle configuration updates
+                    if target == Targets.CONSENSUS_CONFIG or target == Targets.CONSENSUS_STATE:
                         os.chmod(install_path, stat.S_IREAD)
 
-                    # Handle Wrapper install
-                    if install_path == valid_paths["wrapper"]:
+                    # Handle Wrapper updates
+                    if target == Targets.WRAPPER:
                         os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
                         log.info("Wrapper script updated, exiting now...")
                         os._exit(0)
+
                 log.info("Completed command: {}".format(command))
 
             # Update the timestamp in order to avoid repetition
