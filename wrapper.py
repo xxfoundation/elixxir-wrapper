@@ -660,7 +660,7 @@ while True:
                             process = start_binary(start_path, log_path, [])
                     elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
                             (consensus_process is None or consensus_process.poll() is not None):
-                        consensus_process = start_binary(start_path, log_path, [])
+                        consensus_process = start_binary(start_path, log_path, ["--config", Targets.CONSENSUS_CONFIG])
 
                 # STOP COMMAND ===========================
                 elif command_type == "stop":
