@@ -660,8 +660,9 @@ while True:
                             process = start_binary(start_path, log_path, [])
                     elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
                             (consensus_process is None or consensus_process.poll() is not None):
-                        consensus_process = start_binary(start_path, log_path, [
-                            "--config", Targets.CONSENSUS_CONFIG, "--cmixconfig", config_file])
+                        consensus_process = start_binary(start_path, log_path,
+                                                         ["--config", valid_paths[Targets.CONSENSUS_CONFIG],
+                                                          "--cmixconfig", config_file])
 
                 # STOP COMMAND ===========================
                 elif command_type == "stop":
@@ -718,6 +719,7 @@ while True:
                     actual_hash = hashlib.sha256(update_bytes).hexdigest()
                     expected_hash = info.get("sha256sum", "")
                     if actual_hash != expected_hash:
+                        os.remove(path=tmp_path)
                         log.error("Binary {} does not match hash {}".format(
                             tmp_path, expected_hash))
                         timestamps[i] = timestamp
