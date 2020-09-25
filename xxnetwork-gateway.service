@@ -6,6 +6,21 @@ After=local-fs.target network-online.target network.target
 Wants=local-fs.target network-online.target network.target
 
 [Service]
+LockPersonality=true
+NoNewPrivileges=true
+#PrivateDevices=true
+PrivateUsers=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+#ProtectSystem=strict
+RemoveIPC=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+#SystemCallFilter=@system-service ~@clock @module @mount @reboot @swap @privileged
+
 User=ubuntu
 Type=simple
 
