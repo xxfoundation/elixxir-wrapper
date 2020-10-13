@@ -438,6 +438,10 @@ def get_args():
     parser.add_argument("-b", "--binary", type=str,
                         help="Path to the binary",
                         required=True)
+    parser.add_argument("--gpulib", type=str,
+                        default="/opt/xxnetwork/lib/libpowmosm75.so",
+                        help="Path to the gpu exponentiation library",
+                        required=False)
     parser.add_argument("-c", "--configdir", type=str, required=False,
                         help="Path to the config dir, e.g., ~/.xxnetwork/",
                         default=os.path.expanduser("~/.xxnetwork"))
@@ -482,6 +486,7 @@ log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
 log.info("Running with configuration: {}".format(args))
 
 binary_path = args["binary"]
+gpulib_path = args["gpulib"]
 management_directory = args["s3path"]
 
 # Hardcoded variables
@@ -520,7 +525,8 @@ valid_paths = {
     "binary": os.path.abspath(os.path.expanduser(binary_path)),
     "wrapper": os.path.abspath(sys.argv[0]),
     "config": config_file,
-    "cert": rsa_certificate_path
+    "cert": rsa_certificate_path,
+    "gpulib": os.path.abspath(os.path.expanduser(gpulib_path)),
 }
 
 # Record the most recent command timestamp
@@ -692,6 +698,10 @@ while True:
                     # Handle binary install
                     if install_path == valid_paths["binary"]:
                         os.chmod(install_path, stat.S_IEXEC)
+
+                    # Handle libpowmosm75.so install
+                    if install_path == valid_paths["gpulib"]:
+                        os.chmod(install_path, stat.S_IREAD)
 
                     # Handle Wrapper install
                     if install_path == valid_paths["wrapper"]:
