@@ -427,6 +427,10 @@ def get_args():
     parser.add_argument("-b", "--binary", type=str,
                         help="Path of the binary to be run by the wrapper",
                         required=True)
+    parser.add_argument("--gpulib", type=str,
+                        default="/opt/xxnetwork/lib/libpowmosm75.so",
+                        help="Path to the gpu exponentiation library",
+                        required=False)
     parser.add_argument("--disable-consensus", action="store_true",
                         help="Disable consensus binary",
                         default=False, required=False)
@@ -483,6 +487,7 @@ log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
 log.info("Running with configuration: {}".format(args))
 
 binary_path = args["binary"]
+gpulib_path = args["gpulib"]
 management_directory = args["s3path"]
 
 # Hardcoded variables
@@ -518,6 +523,7 @@ if os.path.isfile(config_override):
 # Define possible local targets for commands
 class Targets:
     BINARY = 'binary'
+    GPULIB = 'gpulib'
     WRAPPER = 'wrapper'
     CERT = 'cert'
     CONSENSUS_BINARY = 'consensus_binary'
@@ -529,6 +535,7 @@ class Targets:
 # this machine
 valid_paths = {
     Targets.BINARY: os.path.abspath(os.path.expanduser(binary_path)),
+    Targets.GPULIB: os.path.abspath(os.path.expanduser(gpulib_path)),
     Targets.WRAPPER: os.path.abspath(sys.argv[0]),
     Targets.CERT: rsa_certificate_path,
     Targets.CONSENSUS_BINARY: args["consensus_binary"],
@@ -737,6 +744,10 @@ while True:
                     # Handle binary updates
                     if target == Targets.BINARY or target == Targets.CONSENSUS_BINARY:
                         os.chmod(install_path, stat.S_IEXEC)
+
+                    # Handle libpowmosm75.so install
+                    if target == Targets.GPULIB:
+                        os.chmod(install_path, stat.S_IREAD)
 
                     # Handle configuration updates
                     if target == Targets.CONSENSUS_CONFIG or target == Targets.CONSENSUS_STATE:
