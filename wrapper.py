@@ -492,7 +492,7 @@ def get_args():
                         default=False, required=False)
     parser.add_argument("--cloudwatch-log-group", type=str,
                         help="Log group for CloudWatch logging",
-                        default="xxnetwork-logs-prod")
+                        default="xxnetwork-consensus-prod")
     parser.add_argument("--s3accesskey", type=str, required=True,
                         help="s3 access key")
     parser.add_argument("--s3secret", type=str, required=True,
@@ -603,6 +603,11 @@ if not args["disable_cloudwatch"]:
     cw_logger_thread = start_cw_logger(args["cloudwatch_log_group"], log_path,
                           args["idpath"], s3_bucket_region,
                           s3_access_key_id, s3_access_key_secret)
+    if not args["disable_consensus"]:
+        l1 = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
+                             s3_access_key_id, s3_access_key_secret)
+        l2 = start_cw_logger(consensus_grp, consensus_csv, args["idpath"], s3_bucket_region,
+                             s3_access_key_id, s3_access_key_secret)
 
 # Frequency (in seconds) of checking for new commands
 command_frequency = 10
@@ -700,10 +705,6 @@ while True:
                             process = start_binary(start_path, log_path, [])
                     elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
                             (consensus_process is None or consensus_process.poll() is not None):
-                        l1 = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
-                                             s3_access_key_id, s3_access_key_secret)
-                        l2 = start_cw_logger(consensus_grp, consensus_csv, args["idpath"], s3_bucket_region,
-                                             s3_access_key_id, s3_access_key_secret)
                         consensus_process = start_binary(start_path, log_path,
                                                          ["--config", valid_paths[Targets.CONSENSUS_CONFIG],
                                                           "--cmixconfig", config_file])
