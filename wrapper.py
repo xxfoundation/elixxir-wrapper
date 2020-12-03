@@ -29,7 +29,35 @@ import hashlib
 # FUNCTIONS --------------------------------------------------------------------
 
 
-def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret):
+def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret):
+    """
+    start_cw_logger is a blocking function which starts the thread to log to cloudwatch.
+    This requires a blocking function so we can ensure that if a log file is present,
+    it is opened before logging resumes.  This prevents lines from being omitted in cloudwatch.
+
+    :param cloudwatch_log_group: log group name for cloudwatch logging
+    :param log_file_path: Path to the log file
+    :param id_path: path to node's id file
+    :param region: AWS region
+    :param access_key_id: aws access key
+    :param access_key_secret: aws secret key
+    """
+    # If there is already a log file, open it here so we don't lose records
+    log_file = None
+
+    # Start the log backup service
+    if os.path.isfile(log_path):
+        log_file = open(log_path, 'r+')
+        log_file.seek(0, os.SEEK_END)
+    thr = threading.Thread(target=cloudwatch_log,
+                           args=(cloudwatch_log_group, log_file_path,
+                                 id_path, region,
+                                 access_key_id, access_key_secret, log_file))
+    thr.start()
+    return thr
+
+
+def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret, log_file):
     """
     cloudwatch_log is intended to run in a thread.  It will monitor the file at
     log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
@@ -42,7 +70,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     :param access_key_id: aws access key
     :param access_key_secret: aws secret key
     """
-    global read_node_id, log_file
+    global read_node_id
     # Constants
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
@@ -54,9 +82,9 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     log_events = []  # Buffer of events from log not yet sent to cloudwatch
     events_size = 0
 
-    client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path, region,
-                                                                    cloudwatch_log_group, access_key_id,
-                                                                    access_key_secret)
+    log_file, client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path, region,
+                                                                              cloudwatch_log_group, access_key_id,
+                                                                              access_key_secret, log_file)
     if init_err:
         log.error("Failed to init cloudwatch logging: {}".format(init_err))
         return
@@ -64,8 +92,10 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     log.info("Starting cloudwatch logging...")
 
     last_push_time = time.time()
+    last_line_time = time.time()
     while True:
-        event_buffer, log_events, events_size = process_line(event_buffer, log_events, events_size)
+        event_buffer, log_events, events_size, last_line_time = process_line(log_file, event_buffer, log_events,
+                                                                             events_size, last_line_time)
 
         # Check if we should send events to cloudwatch
         log_event_size = 26
@@ -93,7 +123,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
                 os.path.getsize(log_file_path)))
 
 
-def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, access_key_secret):
+def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, access_key_secret, log_file):
     """
     Initialize client for cloudwatch logging
     :param log_file_path: path to log output
@@ -102,9 +132,10 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
     :param cloudwatch_log_group: cloudwatch log group name
     :param access_key_id: AWS access key id
     :param access_key_secret: AWS access key secret
-    :return client, log_stream_name, upload_sequence_token:
+    :param log_file: log file to read lines from
+    :return log_file, client, log_stream_name, upload_sequence_token:
     """
-    global log_file, read_node_id
+    global read_node_id
     upload_sequence_token = ""
     if not log_file:
         # Wait for log file to exist
@@ -148,24 +179,21 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
     except Exception as e:
         return None, None, None, e
 
-    return client, log_stream_name, upload_sequence_token, None
+    return log_file, client, log_stream_name, upload_sequence_token, None
 
 
-# This is used exclusively in process_line, and needs to be stored across calls
-last_line_time = time.time()
-
-
-def process_line(event_buffer, log_events, events_size):
+def process_line(log_file, event_buffer, log_events, events_size, last_line_time):
     """
     Accepts current buffer and log events from main loop
     Processes one line of input, either adding an event or adding it to the buffer
     New events are marked by a string in log_starters, or are separated by more than 0.5 seconds
+    :param log_file: file to read line from
+    :param last_line_time: Timestamp when last log line was read
     :param events_size: message size for log events per aws docs
     :param event_buffer: string buffer of concatenated lines that make up a single event
     :param log_events: current array of events
     :return:
     """
-    global last_line_time, log_file
     # using these to deliniate the start of an event
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL", "TRACE"]
 
@@ -201,7 +229,7 @@ def process_line(event_buffer, log_events, events_size):
         # Push line on to the buffer
         event_buffer += line
 
-    return event_buffer, log_events, events_size
+    return event_buffer, log_events, events_size, last_line_time
 
 
 def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_log_group):
@@ -443,6 +471,15 @@ def get_args():
     parser.add_argument("--consensus-state", type=str,
                         help="Path to the consensus state file",
                         required=False, default="/opt/xxnetwork/consensus.gob")
+    parser.add_argument("--consensus-log", type=str,
+                        help="Path to the consensus log file",
+                        required=False, default="/opt/xxnetwork/consensus-logs/consensus.log")
+    parser.add_argument("--consensus-csv", type=str,
+                        help="Path to the consensus csv file",
+                        required=False, default="/opt/xxnetwork/consensus-logs/consensus.csv")
+    parser.add_argument("--consensus-cw-group", type=str,
+                        help="CW log group for consensus logs",
+                        required=False, default="xxnetwork-cloudwatch-consensus")
     parser.add_argument("-c", "--configdir", type=str, required=False,
                         help="Path to the config dir, e.g., ~/.xxnetwork/",
                         default="/opt/xxnetwork/")
@@ -512,6 +549,10 @@ os.makedirs(tmp_dir, exist_ok=True)
 remotes_paths = [version_file, command_file]
 cmd_log_dir = args["cmdlogdir"]
 
+consensus_log = args["consensus_log"]
+consensus_csv = args["consensus_csv"]
+consensus_grp = args["consensus_cw_group"]
+
 # Config file is the binaryname.yaml inside the config directory
 config_file = os.path.expanduser(os.path.join(
     args["configdir"], os.path.basename(binary_path) + ".yaml"))
@@ -557,19 +598,11 @@ consensus_process = None
 # Note this is done before the thread split to guarantee the same uuid.
 node_id = get_node_id(args["idpath"])
 
-# If there is already a log file, open it here so we don't lose records
-log_file = None
-
 # Start the log backup service
 if not args["disable_cloudwatch"]:
-    if os.path.isfile(log_path):
-        log_file = open(log_path, 'r+')
-        log_file.seek(0, os.SEEK_END)
-    thr = threading.Thread(target=cloudwatch_log,
-                           args=(args["cloudwatch_log_group"], log_path,
-                                 args["idpath"], s3_bucket_region,
-                                 s3_access_key_id, s3_access_key_secret))
-    thr.start()
+    cw_logger_thread = start_cw_logger(args["cloudwatch_log_group"], log_path,
+                          args["idpath"], s3_bucket_region,
+                          s3_access_key_id, s3_access_key_secret)
 
 # Frequency (in seconds) of checking for new commands
 command_frequency = 10
@@ -667,6 +700,10 @@ while True:
                             process = start_binary(start_path, log_path, [])
                     elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
                             (consensus_process is None or consensus_process.poll() is not None):
+                        l1 = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
+                                             s3_access_key_id, s3_access_key_secret)
+                        l2 = start_cw_logger(consensus_grp, consensus_csv, args["idpath"], s3_bucket_region,
+                                             s3_access_key_id, s3_access_key_secret)
                         consensus_process = start_binary(start_path, log_path,
                                                          ["--config", valid_paths[Targets.CONSENSUS_CONFIG],
                                                           "--cmixconfig", config_file])
