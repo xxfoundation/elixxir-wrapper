@@ -479,7 +479,7 @@ def get_args():
                         required=False, default="/opt/xxnetwork/consensus-logs/consensus.csv")
     parser.add_argument("--consensus-cw-group", type=str,
                         help="CW log group for consensus logs",
-                        required=False, default="xxnetwork-cloudwatch-consensus")
+                        required=False, default="xxnetwork-consensus-prod")
     parser.add_argument("-c", "--configdir", type=str, required=False,
                         help="Path to the config dir, e.g., ~/.xxnetwork/",
                         default="/opt/xxnetwork/")
@@ -492,7 +492,7 @@ def get_args():
                         default=False, required=False)
     parser.add_argument("--cloudwatch-log-group", type=str,
                         help="Log group for CloudWatch logging",
-                        default="xxnetwork-consensus-prod")
+                        default="xxnetwork-logs-prod")
     parser.add_argument("--s3accesskey", type=str, required=True,
                         help="s3 access key")
     parser.add_argument("--s3secret", type=str, required=True,
