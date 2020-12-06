@@ -49,26 +49,32 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
     if os.path.isfile(log_path):
         log_file = open(log_path, 'r+')
         log_file.seek(0, os.SEEK_END)
+
+    log_file, client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path, region,
+                                                                              cloudwatch_log_group, access_key_id,
+                                                                              access_key_secret, log_file)
+    if init_err:
+        log.error("Failed to init cloudwatch logging: {}".format(init_err))
+        return
+
     thr = threading.Thread(target=cloudwatch_log,
                            args=(cloudwatch_log_group, log_file_path,
-                                 id_path, region,
-                                 access_key_id, access_key_secret, log_file))
+                                 log_file, client, log_stream_name))
     thr.start()
     return thr
 
 
-def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret, log_file):
+def cloudwatch_log(cloudwatch_log_group, log_file_path, log_file, client, log_stream_name):
     """
     cloudwatch_log is intended to run in a thread.  It will monitor the file at
     log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
     stream, one will be created for it, named by node ID.
 
+    :param log_stream_name: log stream name
+    :param client: cloudwatch boto3 client
+    :param log_file: cloudwatch log file
     :param cloudwatch_log_group: log group name for cloudwatch logging
     :param log_file_path: Path to the log file
-    :param id_path: path to node's id file
-    :param region: AWS region
-    :param access_key_id: aws access key
-    :param access_key_secret: aws secret key
     """
     global read_node_id
     # Constants
@@ -81,13 +87,6 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
     log_events = []  # Buffer of events from log not yet sent to cloudwatch
     events_size = 0
-
-    log_file, client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path, region,
-                                                                              cloudwatch_log_group, access_key_id,
-                                                                              access_key_secret, log_file)
-    if init_err:
-        log.error("Failed to init cloudwatch logging: {}".format(init_err))
-        return
 
     log.info("Starting cloudwatch logging...")
 
