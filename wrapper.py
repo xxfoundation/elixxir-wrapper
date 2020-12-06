@@ -177,7 +177,7 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
                     upload_sequence_token = s['uploadSequenceToken']
 
     except Exception as e:
-        return None, None, None, e
+        return None, None, None, None, e
 
     return log_file, client, log_stream_name, upload_sequence_token, None
 
