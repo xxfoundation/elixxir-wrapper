@@ -52,7 +52,7 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
 
     # Start the log backup service
     if os.path.isfile(log_file_path):
-        log_file = open(log_path, 'r+')
+        log_file = open(log_file_path, 'r+')
         log_file.seek(0, os.SEEK_END)
     thr = threading.Thread(target=cloudwatch_log,
                            args=(cloudwatch_log_group, log_file_path,
@@ -700,7 +700,7 @@ while True:
                             process = start_binary(start_path, log_path, [])
                     elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
                             (consensus_process is None or consensus_process.poll() is not None):
-                        consensus_process = start_binary(start_path, log_path,
+                        consensus_process = start_binary(start_path, consensus_log,
                                                          ["--config", valid_paths[Targets.CONSENSUS_CONFIG],
                                                           "--cmixconfig", config_file])
 
