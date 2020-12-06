@@ -45,36 +45,33 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
     # If there is already a log file, open it here so we don't lose records
     log_file = None
 
+    # Setup cloudwatch logs client
+    client = boto3.client('logs', region_name=region,
+                          aws_access_key_id=access_key_id,
+                          aws_secret_access_key=access_key_secret)
+
     # Start the log backup service
     if os.path.isfile(log_path):
         log_file = open(log_path, 'r+')
         log_file.seek(0, os.SEEK_END)
-
-    log_file, client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path, region,
-                                                                              cloudwatch_log_group, access_key_id,
-                                                                              access_key_secret, log_file)
-    if init_err:
-        log.error("Failed to init cloudwatch logging: {}".format(init_err))
-        return
-
     thr = threading.Thread(target=cloudwatch_log,
                            args=(cloudwatch_log_group, log_file_path,
-                                 log_file, client, log_stream_name))
+                                 id_path, log_file, client))
     thr.start()
     return thr
 
 
-def cloudwatch_log(cloudwatch_log_group, log_file_path, log_file, client, log_stream_name):
+def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, client):
     """
     cloudwatch_log is intended to run in a thread.  It will monitor the file at
     log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
     stream, one will be created for it, named by node ID.
 
-    :param log_stream_name: log stream name
-    :param client: cloudwatch boto3 client
-    :param log_file: cloudwatch log file
+    :param client: cloudwatch client for this logging thread
+    :param log_file: log file for this logging thread
     :param cloudwatch_log_group: log group name for cloudwatch logging
     :param log_file_path: Path to the log file
+    :param id_path: path to node's id file
     """
     global read_node_id
     # Constants
@@ -87,6 +84,12 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, log_file, client, log_st
     event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
     log_events = []  # Buffer of events from log not yet sent to cloudwatch
     events_size = 0
+
+    log_file, client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path,
+                                                                              cloudwatch_log_group, log_file, client)
+    if init_err:
+        log.error("Failed to init cloudwatch logging: {}".format(init_err))
+        return
 
     log.info("Starting cloudwatch logging...")
 
@@ -122,15 +125,13 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, log_file, client, log_st
                 os.path.getsize(log_file_path)))
 
 
-def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, access_key_secret, log_file):
+def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     """
     Initialize client for cloudwatch logging
+    :param client: cloudwatch client for this logging thread
     :param log_file_path: path to log output
     :param id_path: path to id file
-    :param region: aws region
     :param cloudwatch_log_group: cloudwatch log group name
-    :param access_key_id: AWS access key id
-    :param access_key_secret: AWS access key secret
     :param log_file: log file to read lines from
     :return log_file, client, log_stream_name, upload_sequence_token:
     """
@@ -142,11 +143,6 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
             time.sleep(0.1)
 
         log_file = open(log_file_path, 'r+')
-
-    # Setup cloudwatch logs client
-    client = boto3.client('logs', region_name=region,
-                          aws_access_key_id=access_key_id,
-                          aws_secret_access_key=access_key_secret)
 
     # Define prefix for log stream - should be ID based on file
     if read_node_id:
