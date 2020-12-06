@@ -51,7 +51,7 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
                           aws_secret_access_key=access_key_secret)
 
     # Start the log backup service
-    if os.path.isfile(log_path):
+    if os.path.isfile(log_file_path):
         log_file = open(log_path, 'r+')
         log_file.seek(0, os.SEEK_END)
     thr = threading.Thread(target=cloudwatch_log,
