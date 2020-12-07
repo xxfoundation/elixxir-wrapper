@@ -603,7 +603,7 @@ def main():
         cw_logger_thread = start_cw_logger(args["cloudwatch_log_group"], log_path,
                               args["idpath"], s3_bucket_region,
                               s3_access_key_id, s3_access_key_secret)
-        if not args["disable_consensus"]:
+        if not args["disable_consensus"] and management_directory == "server":
             l1 = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
                                  s3_access_key_id, s3_access_key_secret)
             l2 = start_cw_logger(consensus_grp, consensus_csv, args["idpath"], s3_bucket_region,
