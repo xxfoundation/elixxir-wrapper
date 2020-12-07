@@ -606,8 +606,6 @@ def main():
         if not args["disable_consensus"] and management_directory == "server":
             l1 = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
                                  s3_access_key_id, s3_access_key_secret)
-            l2 = start_cw_logger(consensus_grp, consensus_csv, args["idpath"], s3_bucket_region,
-                                 s3_access_key_id, s3_access_key_secret)
 
     # Frequency (in seconds) of checking for new commands
     command_frequency = 10
