@@ -26,14 +26,15 @@ import botocore.exceptions
 from OpenSSL import crypto
 import hashlib
 
+
 # FUNCTIONS --------------------------------------------------------------------
 
 
-def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret):
+def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret):
     """
-    cloudwatch_log is intended to run in a thread.  It will monitor the file at
-    log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
-    stream, one will be created for it, named by node ID.
+    start_cw_logger is a blocking function which starts the thread to log to cloudwatch.
+    This requires a blocking function so we can ensure that if a log file is present,
+    it is opened before logging resumes.  This prevents lines from being omitted in cloudwatch.
 
     :param cloudwatch_log_group: log group name for cloudwatch logging
     :param log_file_path: Path to the log file
@@ -42,7 +43,38 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     :param access_key_id: aws access key
     :param access_key_secret: aws secret key
     """
-    global read_node_id, log_file
+    # If there is already a log file, open it here so we don't lose records
+    log_file = None
+
+    # Setup cloudwatch logs client
+    client = boto3.client('logs', region_name=region,
+                          aws_access_key_id=access_key_id,
+                          aws_secret_access_key=access_key_secret)
+
+    # Start the log backup service
+    if os.path.isfile(log_file_path):
+        log_file = open(log_file_path, 'r+')
+        log_file.seek(0, os.SEEK_END)
+    thr = threading.Thread(target=cloudwatch_log,
+                           args=(cloudwatch_log_group, log_file_path,
+                                 id_path, log_file, client))
+    thr.start()
+    return thr
+
+
+def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, client):
+    """
+    cloudwatch_log is intended to run in a thread.  It will monitor the file at
+    log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
+    stream, one will be created for it, named by node ID.
+
+    :param client: cloudwatch client for this logging thread
+    :param log_file: log file for this logging thread
+    :param cloudwatch_log_group: log group name for cloudwatch logging
+    :param log_file_path: Path to the log file
+    :param id_path: path to node's id file
+    """
+    global read_node_id
     # Constants
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
@@ -54,9 +86,8 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     log_events = []  # Buffer of events from log not yet sent to cloudwatch
     events_size = 0
 
-    client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path, region,
-                                                                    cloudwatch_log_group, access_key_id,
-                                                                    access_key_secret)
+    log_file, client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path,
+                                                                              cloudwatch_log_group, log_file, client)
     if init_err:
         log.error("Failed to init cloudwatch logging: {}".format(init_err))
         return
@@ -64,8 +95,10 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
     log.info("Starting cloudwatch logging...")
 
     last_push_time = time.time()
+    last_line_time = time.time()
     while True:
-        event_buffer, log_events, events_size = process_line(event_buffer, log_events, events_size)
+        event_buffer, log_events, events_size, last_line_time = process_line(log_file, event_buffer, log_events,
+                                                                             events_size, last_line_time)
 
         # Check if we should send events to cloudwatch
         log_event_size = 26
@@ -93,18 +126,17 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, region, access_
                 os.path.getsize(log_file_path)))
 
 
-def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, access_key_secret):
+def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     """
     Initialize client for cloudwatch logging
+    :param client: cloudwatch client for this logging thread
     :param log_file_path: path to log output
     :param id_path: path to id file
-    :param region: aws region
     :param cloudwatch_log_group: cloudwatch log group name
-    :param access_key_id: AWS access key id
-    :param access_key_secret: AWS access key secret
-    :return client, log_stream_name, upload_sequence_token:
+    :param log_file: log file to read lines from
+    :return log_file, client, log_stream_name, upload_sequence_token:
     """
-    global log_file, read_node_id
+    global read_node_id
     upload_sequence_token = ""
     if not log_file:
         # Wait for log file to exist
@@ -112,11 +144,6 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
             time.sleep(0.1)
 
         log_file = open(log_file_path, 'r+')
-
-    # Setup cloudwatch logs client
-    client = boto3.client('logs', region_name=region,
-                          aws_access_key_id=access_key_id,
-                          aws_secret_access_key=access_key_secret)
 
     # Define prefix for log stream - should be ID based on file
     if read_node_id:
@@ -146,26 +173,23 @@ def init(log_file_path, id_path, region, cloudwatch_log_group, access_key_id, ac
                     upload_sequence_token = s['uploadSequenceToken']
 
     except Exception as e:
-        return None, None, None, e
+        return None, None, None, None, e
 
-    return client, log_stream_name, upload_sequence_token, None
-
-
-# This is used exclusively in process_line, and needs to be stored across calls
-last_line_time = time.time()
+    return log_file, client, log_stream_name, upload_sequence_token, None
 
 
-def process_line(event_buffer, log_events, events_size):
+def process_line(log_file, event_buffer, log_events, events_size, last_line_time):
     """
     Accepts current buffer and log events from main loop
     Processes one line of input, either adding an event or adding it to the buffer
     New events are marked by a string in log_starters, or are separated by more than 0.5 seconds
+    :param log_file: file to read line from
+    :param last_line_time: Timestamp when last log line was read
     :param events_size: message size for log events per aws docs
     :param event_buffer: string buffer of concatenated lines that make up a single event
     :param log_events: current array of events
     :return:
     """
-    global last_line_time, log_file
     # using these to deliniate the start of an event
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL", "TRACE"]
 
@@ -201,7 +225,7 @@ def process_line(event_buffer, log_events, events_size):
         # Push line on to the buffer
         event_buffer += line
 
-    return event_buffer, log_events, events_size
+    return event_buffer, log_events, events_size, last_line_time
 
 
 def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_log_group):
@@ -443,6 +467,12 @@ def get_args():
     parser.add_argument("--consensus-state", type=str,
                         help="Path to the consensus state file",
                         required=False, default="/opt/xxnetwork/consensus.gob")
+    parser.add_argument("--consensus-log", type=str,
+                        help="Path to the consensus log file",
+                        required=False, default="/opt/xxnetwork/consensus-logs/consensus.log")
+    parser.add_argument("--consensus-cw-group", type=str,
+                        help="CW log group for consensus logs",
+                        required=False, default="xxnetwork-consensus-prod")
     parser.add_argument("-c", "--configdir", type=str, required=False,
                         help="Path to the config dir, e.g., ~/.xxnetwork/",
                         default="/opt/xxnetwork/")
@@ -476,51 +506,10 @@ def get_args():
     return vars(parser.parse_args())
 
 
-# INITIALIZATION ---------------------------------------------------------------
-
-# Command line arguments
-args = get_args()
-
-# Configure logger
-log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
-                level=log.INFO, datefmt='%d-%b-%y %H:%M:%S')
-log.info("Running with configuration: {}".format(args))
-
-binary_path = args["binary"]
-gpulib_path = args["gpulib"]
-management_directory = args["s3path"]
-
-# Hardcoded variables
-rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"], "creds",
-                                                       "network_management.crt"))
-if not os.path.exists(rsa_certificate_path):  # check creds dir for file as well
-    rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
-                                                           "network_management.crt"))
-
-s3_management_bucket_name = args["s3managementbucket"]
-s3_access_key_id = args["s3accesskey"]
-s3_access_key_secret = args["s3secret"]
-s3_bucket_region = args["s3region"]
-log_path = args["logpath"]
-os.makedirs(os.path.dirname(args["logpath"]), exist_ok=True)
-
-err_output_path = args["erroutputpath"]
-version_file = management_directory + "/version.jsonl"
-command_file = management_directory + "/command.jsonl"
-tmp_dir = args["tmpdir"]
-os.makedirs(tmp_dir, exist_ok=True)
-remotes_paths = [version_file, command_file]
-cmd_log_dir = args["cmdlogdir"]
-
-# Config file is the binaryname.yaml inside the config directory
-config_file = os.path.expanduser(os.path.join(
-    args["configdir"], os.path.basename(binary_path) + ".yaml"))
-config_override = os.path.abspath(args["configoverride"])
-if os.path.isfile(config_override):
-    config_file = config_override
-
-
+# TARGET CLASS -----------------------------------------------------------------
 # Define possible local targets for commands
+
+
 class Targets:
     BINARY = 'binary'
     GPULIB = 'gpulib'
@@ -531,238 +520,282 @@ class Targets:
     CONSENSUS_STATE = 'consensus_state'
 
 
-# The valid "install" paths we can write to, with their local paths for
-# this machine
-valid_paths = {
-    Targets.BINARY: os.path.abspath(os.path.expanduser(binary_path)),
-    Targets.GPULIB: os.path.abspath(os.path.expanduser(gpulib_path)),
-    Targets.WRAPPER: os.path.abspath(sys.argv[0]),
-    Targets.CERT: rsa_certificate_path,
-    Targets.CONSENSUS_BINARY: args["consensus_binary"],
-    Targets.CONSENSUS_CONFIG: args["consensus_config"],
-    Targets.CONSENSUS_STATE: args["consensus_state"]
-}
+# MAIN FUNCTION ---------------------------------------------------------------
 
-# Record the most recent command timestamp
-# to avoid executing duplicate commands
-timestamps = [0, time.time()]
 
-# Globally keep track of the main process being wrapped
-process = None
-# Globally keep track of the consensus process
-consensus_process = None
+def main():
+    # Command line arguments
+    args = get_args()
 
-# CONTROL FLOW -----------------------------------------------------------------
+    # Configure logger
+    log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
+                    level=log.INFO, datefmt='%d-%b-%y %H:%M:%S')
+    log.info("Running with configuration: {}".format(args))
 
-# Note this is done before the thread split to guarantee the same uuid.
-node_id = get_node_id(args["idpath"])
+    binary_path = args["binary"]
+    gpulib_path = args["gpulib"]
+    management_directory = args["s3path"]
 
-# If there is already a log file, open it here so we don't lose records
-log_file = None
+    # Hardcoded variables
+    rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"], "creds",
+                                                           "network_management.crt"))
+    if not os.path.exists(rsa_certificate_path):  # check creds dir for file as well
+        rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
+                                                               "network_management.crt"))
 
-# Start the log backup service
-if not args["disable_cloudwatch"]:
-    if os.path.isfile(log_path):
-        log_file = open(log_path, 'r+')
-        log_file.seek(0, os.SEEK_END)
-    thr = threading.Thread(target=cloudwatch_log,
-                           args=(args["cloudwatch_log_group"], log_path,
-                                 args["idpath"], s3_bucket_region,
-                                 s3_access_key_id, s3_access_key_secret))
-    thr.start()
+    s3_management_bucket_name = args["s3managementbucket"]
+    s3_access_key_id = args["s3accesskey"]
+    s3_access_key_secret = args["s3secret"]
+    s3_bucket_region = args["s3region"]
+    log_path = args["logpath"]
+    os.makedirs(os.path.dirname(args["logpath"]), exist_ok=True)
 
-# Frequency (in seconds) of checking for new commands
-command_frequency = 10
-log.info("Script initialized at {}".format(time.time()))
+    err_output_path = args["erroutputpath"]
+    version_file = management_directory + "/version.jsonl"
+    command_file = management_directory + "/command.jsonl"
+    tmp_dir = args["tmpdir"]
+    os.makedirs(tmp_dir, exist_ok=True)
+    remotes_paths = [version_file, command_file]
+    cmd_log_dir = args["cmdlogdir"]
 
-# Main command/control loop
-while True:
-    time.sleep(command_frequency)
+    consensus_log = args["consensus_log"]
+    consensus_grp = args["consensus_cw_group"]
 
-    # If there is a recovered error file present, restart the main process
-    if err_output_path and os.path.isfile(err_output_path):
-        log.warning("Restarting binary due to error...")
-        time.sleep(10)
-        try:
-            # Terminate the process if it still exists
-            if not (process is None or process.poll() is not None):
-                terminate_process(process)
+    # Config file is the binaryname.yaml inside the config directory
+    config_file = os.path.expanduser(os.path.join(
+        args["configdir"], os.path.basename(binary_path) + ".yaml"))
+    config_override = os.path.abspath(args["configoverride"])
+    if os.path.isfile(config_override):
+        config_file = config_override
 
-            # Restart the main process
-            if os.path.isfile(config_file):
-                process = start_binary(binary_path, log_path,
-                                       ["--config", config_file])
-            else:
-                process = start_binary(binary_path, log_path, [])
-        except IOError as err:
-            log.error(err)
+    # The valid "install" paths we can write to, with their local paths for
+    # this machine
+    valid_paths = {
+        Targets.BINARY: os.path.abspath(os.path.expanduser(binary_path)),
+        Targets.GPULIB: os.path.abspath(os.path.expanduser(gpulib_path)),
+        Targets.WRAPPER: os.path.abspath(sys.argv[0]),
+        Targets.CERT: rsa_certificate_path,
+        Targets.CONSENSUS_BINARY: args["consensus_binary"],
+        Targets.CONSENSUS_CONFIG: args["consensus_config"],
+        Targets.CONSENSUS_STATE: args["consensus_state"]
+    }
 
-    for i, remote_path in enumerate(remotes_paths):
-        try:
-            # Obtain the latest command file
-            local_path = "{}/{}".format(tmp_dir, os.path.basename(remote_path))
-            download(remote_path, local_path,
-                     s3_management_bucket_name, s3_bucket_region,
-                     s3_access_key_id, s3_access_key_secret)
+    # Record the most recent command timestamp
+    # to avoid executing duplicate commands
+    timestamps = [0, time.time()]
 
-            # Load the command file into JSON
-            with open(local_path, 'r') as cmd_file:
+    # Globally keep track of the main process being wrapped
+    process = None
+    # Globally keep track of the consensus process
+    consensus_process = None
 
-                # Verify the command file signature
-                signed_commands, ok = verify_cmd(cmd_file, rsa_certificate_path)
-                if signed_commands is None:
-                    log.error("Empty command file: {}".format(local_path))
-                    save_cmd(local_path, cmd_log_dir, False, time.time())
+    # CONTROL FLOW -----------------------------------------------------------------
+
+    # Start the log backup service
+    if not args["disable_cloudwatch"]:
+        cw_logger_thread = start_cw_logger(args["cloudwatch_log_group"], log_path,
+                              args["idpath"], s3_bucket_region,
+                              s3_access_key_id, s3_access_key_secret)
+        if not args["disable_consensus"] and management_directory == "server":
+            l1 = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
+                                 s3_access_key_id, s3_access_key_secret)
+
+    # Frequency (in seconds) of checking for new commands
+    command_frequency = 10
+    log.info("Script initialized at {}".format(time.time()))
+
+    # Main command/control loop
+    while True:
+        time.sleep(command_frequency)
+
+        # If there is a recovered error file present, restart the main process
+        if err_output_path and os.path.isfile(err_output_path):
+            log.warning("Restarting binary due to error...")
+            time.sleep(10)
+            try:
+                # Terminate the process if it still exists
+                if not (process is None or process.poll() is not None):
+                    terminate_process(process)
+
+                # Restart the main process
+                if os.path.isfile(config_file):
+                    process = start_binary(binary_path, log_path,
+                                           ["--config", config_file])
+                else:
+                    process = start_binary(binary_path, log_path, [])
+            except IOError as err:
+                log.error(err)
+
+        for i, remote_path in enumerate(remotes_paths):
+            try:
+                # Obtain the latest command file
+                local_path = "{}/{}".format(tmp_dir, os.path.basename(remote_path))
+                download(remote_path, local_path,
+                         s3_management_bucket_name, s3_bucket_region,
+                         s3_access_key_id, s3_access_key_secret)
+
+                # Load the command file into JSON
+                with open(local_path, 'r') as cmd_file:
+
+                    # Verify the command file signature
+                    signed_commands, ok = verify_cmd(cmd_file, rsa_certificate_path)
+                    if signed_commands is None:
+                        log.error("Empty command file: {}".format(local_path))
+                        save_cmd(local_path, cmd_log_dir, False, time.time())
+                        continue
+
+                    # Handle invalid signature
+                    if not ok:
+                        log.error("Failed to verify signature for {}!".format(
+                            local_path), exc_info=True)
+                        save_cmd(local_path, cmd_log_dir, ok, time.time())
+                        continue
+
+                # Save the command into a log
+                timestamp = signed_commands.get("timestamp", 0)
+                save_cmd(local_path, cmd_log_dir, ok, timestamp)
+
+                # If the commands occurred before the script, skip
+                # Note: We do not update unless we get a command we
+                # have verified and can actually attempt to run.
+                if timestamp <= timestamps[i]:
+                    log.debug("Command set with timestamp {} is outdated, "
+                              "ignoring...".format(timestamp))
                     continue
 
-                # Handle invalid signature
-                if not ok:
-                    log.error("Failed to verify signature for {}!".format(
-                        local_path), exc_info=True)
-                    save_cmd(local_path, cmd_log_dir, ok, time.time())
-                    continue
+                # Note: We get the UUID for every valid command in case it changes
+                node_id = get_node_id(args["idpath"])
 
-            # Save the command into a log
-            timestamp = signed_commands.get("timestamp", 0)
-            save_cmd(local_path, cmd_log_dir, ok, timestamp)
+                # Execute the commands in sequence
+                for command in signed_commands.get("commands", list()):
 
-            # If the commands occurred before the script, skip
-            # Note: We do not update unless we get a command we
-            # have verified and can actually attempt to run.
-            if timestamp <= timestamps[i]:
-                log.debug("Command set with timestamp {} is outdated, "
-                          "ignoring...".format(timestamp))
-                continue
+                    # If the command does not apply to us, note that and move on
+                    if "nodes" in command:
+                        node_targets = command.get("nodes", list())
+                        if node_targets and node_id not in node_targets:
+                            log.info("Command does not apply to {}".format(node_id))
+                            timestamps[i] = timestamp
+                            continue
 
-            # Note: We get the UUID for every valid command in case it changes
-            node_id = get_node_id(args["idpath"])
+                    # Command applies, so obtain command information
+                    command_type = command.get("command", "")
+                    target = command.get("target", "")
+                    info = command.get("info", dict())
+                    log.info("Executing command: {}".format(command))
 
-            # Execute the commands in sequence
-            for command in signed_commands.get("commands", list()):
+                    # START COMMAND ===========================
+                    if command_type == "start":
+                        # Decide which type of binary to start
+                        start_path = valid_paths[target]
+                        if target == Targets.BINARY and (process is None or process.poll() is not None):
+                            # Decide whether a config file argument need be specified
+                            if os.path.isfile(config_file):
+                                process = start_binary(start_path, log_path,
+                                                       ["--config", config_file])
+                            else:
+                                process = start_binary(start_path, log_path, [])
+                        elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
+                                (consensus_process is None or consensus_process.poll() is not None):
+                            consensus_process = start_binary(start_path, consensus_log,
+                                                             ["--config", valid_paths[Targets.CONSENSUS_CONFIG],
+                                                              "--cmixconfig", config_file])
 
-                # If the command does not apply to us, note that and move on
-                if "nodes" in command:
-                    node_targets = command.get("nodes", list())
-                    if node_targets and node_id not in node_targets:
-                        log.info("Command does not apply to {}".format(node_id))
-                        timestamps[i] = timestamp
-                        continue
+                    # STOP COMMAND ===========================
+                    elif command_type == "stop":
+                        # Stop the wrapped process
+                        if target == Targets.BINARY:
+                            terminate_process(process)
+                        elif target == Targets.CONSENSUS_BINARY:
+                            terminate_process(consensus_process)
 
-                # Command applies, so obtain command information
-                command_type = command.get("command", "")
-                target = command.get("target", "")
-                info = command.get("info", dict())
-                log.info("Executing command: {}".format(command))
+                    # DELAY COMMAND ===========================
+                    elif command_type == "delay":
+                        # Delay for the given amount of time
+                        # NOTE: Provided in MS, converted to seconds
+                        duration = info.get("time", 0)
+                        log.info("Delaying for {}ms...".format(duration))
+                        time.sleep(duration / 1000)
 
-                # START COMMAND ===========================
-                if command_type == "start":
-                    # Decide which type of binary to start
-                    start_path = valid_paths[target]
-                    if target == Targets.BINARY and (process is None or process.poll() is not None):
-                        # Decide whether a config file argument need be specified
-                        if os.path.isfile(config_file):
-                            process = start_binary(start_path, log_path,
-                                                   ["--config", config_file])
-                        else:
-                            process = start_binary(start_path, log_path, [])
-                    elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
-                            (consensus_process is None or consensus_process.poll() is not None):
-                        consensus_process = start_binary(start_path, log_path,
-                                                         ["--config", valid_paths[Targets.CONSENSUS_CONFIG],
-                                                          "--cmixconfig", config_file])
+                    # UPDATE COMMAND ===========================
+                    elif command_type == "update":
 
-                # STOP COMMAND ===========================
-                elif command_type == "stop":
-                    # Stop the wrapped process
-                    if target == Targets.BINARY:
-                        terminate_process(process)
-                    elif target == Targets.CONSENSUS_BINARY:
-                        terminate_process(consensus_process)
+                        # Handle disabled updates flag
+                        if args["disableupdates"]:
+                            log.error("Update command ignored, updates disabled!")
+                            timestamps[i] = timestamp
+                            continue
 
-                # DELAY COMMAND ===========================
-                elif command_type == "delay":
-                    # Delay for the given amount of time
-                    # NOTE: Provided in MS, converted to seconds
-                    duration = info.get("time", 0)
-                    log.info("Delaying for {}ms...".format(duration))
-                    time.sleep(duration / 1000)
+                        # Handle disabled consensus flag
+                        if target == Targets.CONSENSUS_BINARY and args["disable_consensus"]:
+                            log.error("Update command ignored, consensus disabled!")
+                            timestamps[i] = timestamp
+                            continue
 
-                # UPDATE COMMAND ===========================
-                elif command_type == "update":
+                        # Verify valid install path
+                        if target not in valid_paths.keys():
+                            log.error("Invalid update target: {}. Expected one of: {}".format(
+                                target, valid_paths.values()))
+                            timestamps[i] = timestamp
+                            continue
 
-                    # Handle disabled updates flag
-                    if args["disableupdates"]:
-                        log.error("Update command ignored, updates disabled!")
-                        timestamps[i] = timestamp
-                        continue
+                        # Obtain pathing information
+                        install_path = valid_paths[target]
+                        update_path = "{}/{}".format(management_directory, info.get("path", ""))
+                        log.info("Updating file at {} to {}...".format(update_path, install_path))
 
-                    # Handle disabled consensus flag
-                    if target == Targets.CONSENSUS_BINARY and args["disable_consensus"]:
-                        log.error("Update command ignored, consensus disabled!")
-                        timestamps[i] = timestamp
-                        continue
+                        # Make directories and download file to temporary location
+                        os.makedirs(os.path.dirname(install_path), exist_ok=True)
+                        tmp_path = install_path + ".tmp"
+                        download(update_path, tmp_path,
+                                 s3_management_bucket_name, s3_bucket_region,
+                                 s3_access_key_id, s3_access_key_secret)
 
-                    # Verify valid install path
-                    if target not in valid_paths.keys():
-                        log.error("Invalid update target: {}. Expected one of: {}".format(
-                            target, valid_paths.values()))
-                        timestamps[i] = timestamp
-                        continue
+                        # Ensure the hash of the downloaded file matches the command
+                        update_bytes = bytes(open(tmp_path, 'rb').read())
+                        actual_hash = hashlib.sha256(update_bytes).hexdigest()
+                        expected_hash = info.get("sha256sum", "")
+                        if actual_hash != expected_hash:
+                            os.remove(path=tmp_path)
+                            log.error("Binary {} does not match hash {}".format(
+                                tmp_path, expected_hash))
+                            timestamps[i] = timestamp
+                            continue
 
-                    # Obtain pathing information
-                    install_path = valid_paths[target]
-                    update_path = "{}/{}".format(management_directory, info.get("path", ""))
-                    log.info("Updating file at {} to {}...".format(update_path, install_path))
+                        # Move the file into place, overwriting anything that's there.
+                        try:
+                            os.replace(tmp_path, install_path)
+                        except Exception as err:
+                            log.error("Could not overwrite {} with {}: {}".format(
+                                binary_path, tmp_path, err))
+                            timestamps[i] = timestamp
+                            continue
 
-                    # Make directories and download file to temporary location
-                    os.makedirs(os.path.dirname(install_path), exist_ok=True)
-                    tmp_path = install_path + ".tmp"
-                    download(update_path, tmp_path,
-                             s3_management_bucket_name, s3_bucket_region,
-                             s3_access_key_id, s3_access_key_secret)
+                        # Handle binary updates
+                        if target == Targets.BINARY or target == Targets.CONSENSUS_BINARY:
+                            os.chmod(install_path, stat.S_IEXEC)
 
-                    # Ensure the hash of the downloaded file matches the command
-                    update_bytes = bytes(open(tmp_path, 'rb').read())
-                    actual_hash = hashlib.sha256(update_bytes).hexdigest()
-                    expected_hash = info.get("sha256sum", "")
-                    if actual_hash != expected_hash:
-                        os.remove(path=tmp_path)
-                        log.error("Binary {} does not match hash {}".format(
-                            tmp_path, expected_hash))
-                        timestamps[i] = timestamp
-                        continue
+                        # Handle libpowmosm75.so install
+                        if target == Targets.GPULIB:
+                            os.chmod(install_path, stat.S_IREAD)
 
-                    # Move the file into place, overwriting anything that's there.
-                    try:
-                        os.replace(tmp_path, install_path)
-                    except Exception as err:
-                        log.error("Could not overwrite {} with {}: {}".format(
-                            binary_path, tmp_path, err))
-                        timestamps[i] = timestamp
-                        continue
+                        # Handle configuration updates
+                        if target == Targets.CONSENSUS_CONFIG or target == Targets.CONSENSUS_STATE:
+                            os.chmod(install_path, stat.S_IREAD)
 
-                    # Handle binary updates
-                    if target == Targets.BINARY or target == Targets.CONSENSUS_BINARY:
-                        os.chmod(install_path, stat.S_IEXEC)
+                        # Handle Wrapper updates
+                        if target == Targets.WRAPPER:
+                            os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
+                            log.info("Wrapper script updated, exiting now...")
+                            os._exit(0)
 
-                    # Handle libpowmosm75.so install
-                    if target == Targets.GPULIB:
-                        os.chmod(install_path, stat.S_IREAD)
+                    log.info("Completed command: {}".format(command))
 
-                    # Handle configuration updates
-                    if target == Targets.CONSENSUS_CONFIG or target == Targets.CONSENSUS_STATE:
-                        os.chmod(install_path, stat.S_IREAD)
+                # Update the timestamp in order to avoid repetition
+                timestamps[i] = timestamp
+            except Exception as err:
+                log.error("Unable to execute commands: {}".format(err),
+                          exc_info=True)
 
-                    # Handle Wrapper updates
-                    if target == Targets.WRAPPER:
-                        os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
-                        log.info("Wrapper script updated, exiting now...")
-                        os._exit(0)
 
-                log.info("Completed command: {}".format(command))
-
-            # Update the timestamp in order to avoid repetition
-            timestamps[i] = timestamp
-        except Exception as err:
-            log.error("Unable to execute commands: {}".format(err),
-                      exc_info=True)
+if __name__ == "__main__":
+    main()
