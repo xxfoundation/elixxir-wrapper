@@ -470,9 +470,6 @@ def get_args():
     parser.add_argument("--consensus-log", type=str,
                         help="Path to the consensus log file",
                         required=False, default="/opt/xxnetwork/consensus-logs/consensus.log")
-    parser.add_argument("--consensus-csv", type=str,
-                        help="Path to the consensus csv file",
-                        required=False, default="/opt/xxnetwork/consensus-logs/consensus.csv")
     parser.add_argument("--consensus-cw-group", type=str,
                         help="CW log group for consensus logs",
                         required=False, default="xxnetwork-consensus-prod")
@@ -562,7 +559,6 @@ def main():
     cmd_log_dir = args["cmdlogdir"]
 
     consensus_log = args["consensus_log"]
-    consensus_csv = args["consensus_csv"]
     consensus_grp = args["consensus_cw_group"]
 
     # Config file is the binaryname.yaml inside the config directory
@@ -594,9 +590,6 @@ def main():
     consensus_process = None
 
     # CONTROL FLOW -----------------------------------------------------------------
-
-    # Note this is done before the thread split to guarantee the same uuid.
-    node_id = get_node_id(args["idpath"])
 
     # Start the log backup service
     if not args["disable_cloudwatch"]:
