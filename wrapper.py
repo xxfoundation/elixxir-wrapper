@@ -50,7 +50,6 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
     client = boto3.client('logs', region_name=region,
                           aws_access_key_id=access_key_id,
                           aws_secret_access_key=access_key_secret)
-
     # Start the log backup service
     if os.path.isfile(log_file_path):
         log_file = open(log_file_path, 'r+')
@@ -78,7 +77,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     # Constants
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
-    push_frequency = 1  # frequency of pushes to cloudwatch, in seconds
+    push_frequency = 3  # frequency of pushes to cloudwatch, in seconds
     max_send_size = megabyte
 
     # Event buffer and storage
@@ -152,7 +151,7 @@ def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     else:
         log.info("Waiting for ID file...")
         while not os.path.exists(id_path):
-            time.sleep(0.1)
+            time.sleep(1)
         log_prefix = get_node_id(id_path)
 
     log_name = os.path.basename(log_file_path)  # Name of the log file
@@ -194,11 +193,10 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL", "TRACE"]
 
     # This controls how long we should wait after a line before assuming it's the end of an event
-    force_event_time = 0.5
+    force_event_time = 1
     maximum_event_size = 262144
 
     # Get a line and mark the time it's read
-    where = log_file.tell()
     line = log_file.readline()
     line_time = int(round(time.time() * 1000))  # Timestamp for this line
 
@@ -209,8 +207,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
     if not line:
         # if it's been more than force_event_time since last line, push buffer to events
         is_new_line = time.time() - last_line_time > force_event_time and event_buffer != ""
-        log_file.seek(where)
-        time.sleep(0.1)
+        time.sleep(0.5)
     else:
         # Reset last line time
         last_line_time = time.time()
