@@ -198,6 +198,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
     maximum_event_size = 262144
 
     # Get a line and mark the time it's read
+    where = log_file.tell()
     line = log_file.readline()
     line_time = int(round(time.time() * 1000))  # Timestamp for this line
 
@@ -208,6 +209,8 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
     if not line:
         # if it's been more than force_event_time since last line, push buffer to events
         is_new_line = time.time() - last_line_time > force_event_time and event_buffer != ""
+        log_file.seek(where)
+        time.sleep(0.1)
     else:
         # Reset last line time
         last_line_time = time.time()
