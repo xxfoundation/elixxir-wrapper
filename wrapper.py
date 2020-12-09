@@ -507,7 +507,7 @@ def get_args():
     args, unknown = parser.parse_known_args()
 
     # Handle unknown args
-    if len(unknown > 0):
+    if len(unknown) > 0:
         log.warning("Unknown arguments: {}".format(unknown))
     return vars(args)
 
