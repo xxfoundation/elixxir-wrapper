@@ -222,6 +222,8 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
         events_size += (size + 26)  # Increment buffer size by message len + 26 (per aws documentation)
 
     if line:
+        if len(line.encode(encoding='utf-8')) > maximum_event_size:
+            line = line[:maximum_event_size-1]
         # Push line on to the buffer
         event_buffer += line
 
