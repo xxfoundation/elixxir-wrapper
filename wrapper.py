@@ -119,7 +119,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
 
         if log_size > max_size:
             # Clear the log file
-            log.warning("Log has reached maximum size. Clearing...")
+            log.warning("Log {} has reached maximum size: {}. Clearing...".format(log_file_path, log_size))
             log_file.close()
             log_file = open(log_file_path, "w+")
             log.info("Log has been cleared. New Size: {}".format(
