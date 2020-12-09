@@ -89,10 +89,10 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     log_file, client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path,
                                                                               cloudwatch_log_group, log_file, client)
     if init_err:
-        log.error("Failed to init cloudwatch logging: {}".format(init_err))
+        log.error("Failed to init cloudwatch logging for {}: {}".format(cloudwatch_log_group, init_err))
         return
 
-    log.info("Starting cloudwatch logging...")
+    log.info("Starting cloudwatch logging for {}...".format(cloudwatch_log_group))
 
     last_push_time = time.time()
     last_line_time = time.time()
@@ -115,15 +115,15 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
 
         # Check if the log file is too large
         log_size = os.path.getsize(log_file_path)
-        log.debug("Current Log Size: {}".format(log_size))
+        log.debug("Current log {} size: {}".format(log_file_path, log_size))
 
         if log_size > max_size:
             # Clear the log file
-            log.warning("Log has reached maximum size. Clearing...")
+            log.warning("Log {} has reached maximum size: {}. Clearing...".format(log_file_path, log_size))
             log_file.close()
             log_file = open(log_file_path, "w+")
-            log.info("Log has been cleared. New Size: {}".format(
-                os.path.getsize(log_file_path)))
+            log.info("Log {} has been cleared. New Size: {}".format(
+                log_file_path, os.path.getsize(log_file_path)))
 
 
 def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
@@ -504,9 +504,12 @@ def get_args():
     parser.add_argument("--configoverride", type=str, required=False,
                         help="Override for config file path", default="")
 
-    # This is deprecated but cannot be deleted without a service file update
-    parser.add_argument("--s3logbucket", type=str, help="s3 log bucket name")
-    return vars(parser.parse_args())
+    args, unknown = parser.parse_known_args()
+
+    # Handle unknown args
+    if len(unknown) > 0:
+        log.warning("Unknown arguments: {}".format(unknown))
+    return vars(args)
 
 
 # TARGET CLASS -----------------------------------------------------------------
@@ -527,12 +530,12 @@ class Targets:
 
 
 def main():
-    # Command line arguments
-    args = get_args()
-
     # Configure logger
     log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
                     level=log.INFO, datefmt='%d-%b-%y %H:%M:%S')
+
+    # Command line arguments
+    args = get_args()
     log.info("Running with configuration: {}".format(args))
 
     binary_path = args["binary"]
@@ -596,12 +599,12 @@ def main():
 
     # Start the log backup service
     if not args["disable_cloudwatch"]:
-        cw_logger_thread = start_cw_logger(args["cloudwatch_log_group"], log_path,
-                              args["idpath"], s3_bucket_region,
-                              s3_access_key_id, s3_access_key_secret)
+        start_cw_logger(args["cloudwatch_log_group"], log_path,
+                        args["idpath"], s3_bucket_region,
+                        s3_access_key_id, s3_access_key_secret)
         if not args["disable_consensus"] and management_directory == "server":
-            l1 = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
-                                 s3_access_key_id, s3_access_key_secret)
+            start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
+                            s3_access_key_id, s3_access_key_secret)
 
     # Frequency (in seconds) of checking for new commands
     command_frequency = 10
@@ -622,10 +625,10 @@ def main():
 
                 # Restart the main process
                 if os.path.isfile(config_file):
-                    process = start_binary(binary_path, log_path,
+                    process = start_binary(valid_paths[Targets.BINARY], log_path,
                                            ["--config", config_file])
                 else:
-                    process = start_binary(binary_path, log_path, [])
+                    process = start_binary(valid_paths[Targets.BINARY], log_path, [])
             except IOError as err:
                 log.error(err)
 
@@ -689,17 +692,16 @@ def main():
                     # START COMMAND ===========================
                     if command_type == "start":
                         # Decide which type of binary to start
-                        start_path = valid_paths[target]
                         if target == Targets.BINARY and (process is None or process.poll() is not None):
                             # Decide whether a config file argument need be specified
                             if os.path.isfile(config_file):
-                                process = start_binary(start_path, log_path,
+                                process = start_binary(valid_paths[Targets.BINARY], log_path,
                                                        ["--config", config_file])
                             else:
-                                process = start_binary(start_path, log_path, [])
+                                process = start_binary(valid_paths[Targets.BINARY], log_path, [])
                         elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
                                 (consensus_process is None or consensus_process.poll() is not None):
-                            consensus_process = start_binary(start_path, consensus_log,
+                            consensus_process = start_binary(valid_paths[Targets.CONSENSUS_BINARY], consensus_log,
                                                              ["--config", valid_paths[Targets.CONSENSUS_CONFIG],
                                                               "--cmixconfig", config_file])
 
@@ -769,7 +771,7 @@ def main():
                             os.replace(tmp_path, install_path)
                         except Exception as err:
                             log.error("Could not overwrite {} with {}: {}".format(
-                                binary_path, tmp_path, err))
+                                install_path, tmp_path, err))
                             timestamps[i] = timestamp
                             continue
 
