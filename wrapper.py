@@ -50,10 +50,13 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
     client = boto3.client('logs', region_name=region,
                           aws_access_key_id=access_key_id,
                           aws_secret_access_key=access_key_secret)
-    # Start the log backup service
+
+    # Open the log file read-only and pin its current size if it already exists
     if os.path.isfile(log_file_path):
-        log_file = open(log_file_path, 'r+')
+        log_file = open(log_file_path, 'r')
         log_file.seek(0, os.SEEK_END)
+
+    # Start the log backup service
     thr = threading.Thread(target=cloudwatch_log,
                            args=(cloudwatch_log_group, log_file_path,
                                  id_path, log_file, client))
@@ -112,14 +115,14 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
             log_events = []
             last_push_time = time.time()
 
-        # Check if the log file is too large
+        # Clear the log file if it has exceeded maximum size
         log_size = os.path.getsize(log_file_path)
         log.debug("Current log {} size: {}".format(log_file_path, log_size))
-
         if log_size > max_size:
-            # Clear the log file
+            # Close the old log file
             log.warning("Log {} has reached maximum size: {}. Clearing...".format(log_file_path, log_size))
             log_file.close()
+            # Overwrite the log with an empty file and reopen
             log_file = open(log_file_path, "w+")
             log.info("Log {} has been cleared. New Size: {}".format(
                 log_file_path, os.path.getsize(log_file_path)))
@@ -137,12 +140,13 @@ def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     """
     global read_node_id
     upload_sequence_token = ""
-    if not log_file:
-        # Wait for log file to exist
-        while not os.path.isfile(log_file_path):
-            time.sleep(0.1)
 
-        log_file = open(log_file_path, 'r+')
+    # If the log file does not already exist, wait for it
+    if not log_file:
+        while not os.path.isfile(log_file_path):
+            time.sleep(1)
+        # Open the newly-created log file as read-only
+        log_file = open(log_file_path, 'r')
 
     # Define prefix for log stream - should be ID based on file
     if read_node_id:
