@@ -89,10 +89,10 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     log_file, client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path,
                                                                               cloudwatch_log_group, log_file, client)
     if init_err:
-        log.error("Failed to init cloudwatch logging: {}".format(init_err))
+        log.error("Failed to init cloudwatch logging for {}: {}".format(cloudwatch_log_group, init_err))
         return
 
-    log.info("Starting cloudwatch logging...")
+    log.info("Starting cloudwatch logging for {}...".format(cloudwatch_log_group))
 
     last_push_time = time.time()
     last_line_time = time.time()
@@ -115,15 +115,15 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
 
         # Check if the log file is too large
         log_size = os.path.getsize(log_file_path)
-        log.debug("Current Log Size: {}".format(log_size))
+        log.debug("Current log {} size: {}".format(log_file_path, log_size))
 
         if log_size > max_size:
             # Clear the log file
             log.warning("Log {} has reached maximum size: {}. Clearing...".format(log_file_path, log_size))
             log_file.close()
             log_file = open(log_file_path, "w+")
-            log.info("Log has been cleared. New Size: {}".format(
-                os.path.getsize(log_file_path)))
+            log.info("Log {} has been cleared. New Size: {}".format(
+                log_file_path, os.path.getsize(log_file_path)))
 
 
 def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
