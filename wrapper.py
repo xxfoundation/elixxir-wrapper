@@ -519,14 +519,12 @@ def get_args():
 # TARGET CLASS -----------------------------------------------------------------
 # Define possible local targets for commands
 
-
 class Targets:
     BINARY = 'binary'
     GPULIB = 'gpulib'
     WRAPPER = 'wrapper'
     CERT = 'cert'
     CONSENSUS_BINARY = 'consensus_binary'
-    CONSENSUS_CONFIG = 'consensus_config'
     CONSENSUS_STATE = 'consensus_state'
 
 
@@ -570,6 +568,7 @@ def main():
 
     consensus_log = args["consensus_log"]
     consensus_grp = args["consensus_cw_group"]
+    consensus_config = args["consensus_config"]
 
     # Config file is the binaryname.yaml inside the config directory
     config_file = os.path.expanduser(os.path.join(
@@ -586,7 +585,6 @@ def main():
         Targets.WRAPPER: os.path.abspath(sys.argv[0]),
         Targets.CERT: rsa_certificate_path,
         Targets.CONSENSUS_BINARY: args["consensus_binary"],
-        Targets.CONSENSUS_CONFIG: args["consensus_config"],
         Targets.CONSENSUS_STATE: args["consensus_state"]
     }
 
@@ -706,7 +704,7 @@ def main():
                         elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
                                 (consensus_process is None or consensus_process.poll() is not None):
                             consensus_process = start_binary(valid_paths[Targets.CONSENSUS_BINARY], consensus_log,
-                                                             ["--config", valid_paths[Targets.CONSENSUS_CONFIG],
+                                                             ["--config", consensus_config,
                                                               "--cmixconfig", config_file])
 
                     # STOP COMMAND ===========================
