@@ -24,6 +24,7 @@ import uuid
 import boto3
 import botocore.exceptions
 import tarfile
+import shutil
 from OpenSSL import crypto
 import hashlib
 
@@ -790,9 +791,17 @@ def main():
                         # Handle consensus state updates
                         if target == Targets.CONSENSUS_STATE:
                             os.chmod(install_path, stat.S_IREAD)
+                            dest_path = os.path.dirname(install_path)
+
+                            # Remove existing state directory
+                            try:
+                                shutil.rmtree(dest_path)
+                            except OSError as e:
+                                log.error("Unable to remove {}: {}".format(dest_path, e))
+
                             # Extract the tarball
                             with tarfile.open(install_path) as tarball:
-                                tarball.extractall(path=os.path.basename(install_path))
+                                tarball.extractall(path=dest_path)
 
                         # Handle wrapper updates
                         if target == Targets.WRAPPER:
