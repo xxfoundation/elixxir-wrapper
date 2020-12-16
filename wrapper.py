@@ -199,7 +199,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
 
     # This controls how long we should wait after a line before assuming it's the end of an event
     force_event_time = 1
-    maximum_event_size = 262144
+    maximum_event_size = 260000
 
     # Get a line and mark the time it's read
     line = log_file.readline()
