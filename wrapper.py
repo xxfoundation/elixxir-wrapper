@@ -109,11 +109,12 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
 
         if (is_over_max_size or is_time_to_push) and len(log_events) > 0:
             # Send to cloudwatch, then reset events, size and push time
-            upload_sequence_token = send(client, upload_sequence_token,
-                                         log_events, log_stream_name, cloudwatch_log_group)
-            events_size = 0
-            log_events = []
-            last_push_time = time.time()
+            upload_sequence_token, ok = send(client, upload_sequence_token,
+                                             log_events, log_stream_name, cloudwatch_log_group)
+            if ok:
+                events_size = 0
+                log_events = []
+                last_push_time = time.time()
 
         # Clear the log file if it has exceeded maximum size
         log_size = os.path.getsize(log_file_path)
@@ -244,6 +245,7 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
     :param upload_sequence_token: sequence token for log stream
     :return: new sequence token
     """
+    ok = True
     if len(log_events) == 0:
         return upload_sequence_token
 
@@ -265,13 +267,19 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
             log.warning("Some log events were rejected:")
             log.warning(resp['rejectedLogEventsInfo'])
 
+    except client.exceptions.InvalidSequenceTokenException as e:
+        ok = False
+        log.warning(f"Boto3 invalidSequenceTokenException encountered: {e}")
+        upload_sequence_token = e.response['Error']['Message'].split()[-1]
     except botocore.exceptions.ClientError as e:
+        ok = False
         log.error("Boto3 client error encountered: %s" % e)
     except Exception as e:
+        ok = False
         log.error(e)
     finally:
         # Always return upload sequence token - dropping this causes lots of errors
-        return upload_sequence_token
+        return upload_sequence_token, ok
 
 
 def download(src_path, dst_path, s3_bucket, region,
