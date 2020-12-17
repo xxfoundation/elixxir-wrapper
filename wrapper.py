@@ -23,6 +23,8 @@ import time
 import uuid
 import boto3
 import botocore.exceptions
+import tarfile
+import shutil
 from OpenSSL import crypto
 import hashlib
 
@@ -471,8 +473,8 @@ def get_args():
                         help="Path to the consensus config file",
                         required=False, default="/opt/xxnetwork/consensus.yaml")
     parser.add_argument("--consensus-state", type=str,
-                        help="Path to the consensus state file",
-                        required=False, default="/opt/xxnetwork/consensus.gob")
+                        help="Path to the consensus state tarball",
+                        required=False, default="/opt/xxnetwork/consensus.tar.gz")
     parser.add_argument("--consensus-log", type=str,
                         help="Path to the consensus log file",
                         required=False, default="/opt/xxnetwork/consensus-logs/consensus.log")
@@ -518,14 +520,12 @@ def get_args():
 # TARGET CLASS -----------------------------------------------------------------
 # Define possible local targets for commands
 
-
 class Targets:
     BINARY = 'binary'
     GPULIB = 'gpulib'
     WRAPPER = 'wrapper'
     CERT = 'cert'
     CONSENSUS_BINARY = 'consensus_binary'
-    CONSENSUS_CONFIG = 'consensus_config'
     CONSENSUS_STATE = 'consensus_state'
 
 
@@ -569,6 +569,7 @@ def main():
 
     consensus_log = args["consensus_log"]
     consensus_grp = args["consensus_cw_group"]
+    consensus_config = args["consensus_config"]
 
     # Config file is the binaryname.yaml inside the config directory
     config_file = os.path.expanduser(os.path.join(
@@ -585,7 +586,6 @@ def main():
         Targets.WRAPPER: os.path.abspath(sys.argv[0]),
         Targets.CERT: rsa_certificate_path,
         Targets.CONSENSUS_BINARY: args["consensus_binary"],
-        Targets.CONSENSUS_CONFIG: args["consensus_config"],
         Targets.CONSENSUS_STATE: args["consensus_state"]
     }
 
@@ -705,7 +705,7 @@ def main():
                         elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
                                 (consensus_process is None or consensus_process.poll() is not None):
                             consensus_process = start_binary(valid_paths[Targets.CONSENSUS_BINARY], consensus_log,
-                                                             ["--config", valid_paths[Targets.CONSENSUS_CONFIG],
+                                                             ["--config", consensus_config,
                                                               "--cmixconfig", config_file])
 
                     # STOP COMMAND ===========================
@@ -734,7 +734,8 @@ def main():
                             continue
 
                         # Handle disabled consensus flag
-                        if target == Targets.CONSENSUS_BINARY and args["disable_consensus"]:
+                        if (target == Targets.CONSENSUS_BINARY or target == Targets.CONSENSUS_STATE) \
+                                and args["disable_consensus"]:
                             log.error("Update command ignored, consensus disabled!")
                             timestamps[i] = timestamp
                             continue
@@ -746,8 +747,9 @@ def main():
                             timestamps[i] = timestamp
                             continue
 
-                        # Obtain pathing information
+                        # Get local destination path
                         install_path = valid_paths[target]
+                        # Get remote source path
                         update_path = "{}/{}".format(management_directory, info.get("path", ""))
                         log.info("Updating file at {} to {}...".format(update_path, install_path))
 
@@ -758,18 +760,18 @@ def main():
                                  s3_management_bucket_name, s3_bucket_region,
                                  s3_access_key_id, s3_access_key_secret)
 
-                        # Ensure the hash of the downloaded file matches the command
+                        # Ensure the hash of the downloaded file matches the hash in the command
                         update_bytes = bytes(open(tmp_path, 'rb').read())
                         actual_hash = hashlib.sha256(update_bytes).hexdigest()
                         expected_hash = info.get("sha256sum", "")
                         if actual_hash != expected_hash:
                             os.remove(path=tmp_path)
-                            log.error("Binary {} does not match hash {}".format(
-                                tmp_path, expected_hash))
+                            log.error("Downloaded file {} does not match provided hash. Expected {}, got {}".format(
+                                tmp_path, expected_hash, actual_hash))
                             timestamps[i] = timestamp
                             continue
 
-                        # Move the file into place, overwriting anything that's there.
+                        # Move the downloaded file into place, overwriting anything that's there
                         try:
                             os.replace(tmp_path, install_path)
                         except Exception as err:
@@ -782,15 +784,26 @@ def main():
                         if target == Targets.BINARY or target == Targets.CONSENSUS_BINARY:
                             os.chmod(install_path, stat.S_IEXEC)
 
-                        # Handle libpowmosm75.so install
+                        # Handle GPU library updates
                         if target == Targets.GPULIB:
                             os.chmod(install_path, stat.S_IREAD)
 
-                        # Handle configuration updates
-                        if target == Targets.CONSENSUS_CONFIG or target == Targets.CONSENSUS_STATE:
+                        # Handle consensus state updates
+                        if target == Targets.CONSENSUS_STATE:
                             os.chmod(install_path, stat.S_IREAD)
+                            dest_path = os.path.dirname(install_path)
 
-                        # Handle Wrapper updates
+                            # Remove existing state directory
+                            try:
+                                shutil.rmtree(dest_path)
+                            except OSError as e:
+                                log.error("Unable to remove {}: {}".format(dest_path, e))
+
+                            # Extract the tarball
+                            with tarfile.open(install_path) as tarball:
+                                tarball.extractall(path=dest_path)
+
+                        # Handle wrapper updates
                         if target == Targets.WRAPPER:
                             os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
                             log.info("Wrapper script updated, exiting now...")
