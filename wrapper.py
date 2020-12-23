@@ -799,7 +799,9 @@ def main():
                         # Handle consensus state updates
                         if target == Targets.CONSENSUS_STATE:
                             os.chmod(install_path, stat.S_IREAD)
-                            dest_path = os.path.dirname(install_path)
+
+                            # Assemble the path to the extracted consensus directory
+                            dest_path = os.path.join(os.path.dirname(install_path), 'consensus')
 
                             # Remove existing state directory
                             try:
