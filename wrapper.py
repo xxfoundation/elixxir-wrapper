@@ -397,7 +397,7 @@ def get_node_id(id_path):
 
 def verify_cmd(in_buf, public_key_path):
     """
-    verify_cmd checks the command signature against the network certificate. 
+    verify_cmd checks the command signature against the network certificate.
 
     :param in_buf: the command file buffer
     :type in_buf: file object
@@ -759,7 +759,7 @@ def main():
                         install_path = valid_paths[target]
                         # Get remote source path
                         update_path = "{}/{}".format(management_directory, info.get("path", ""))
-                        log.info("Updating file at {} to {}...".format(update_path, install_path))
+                        log.info("Downloading file at {} to {}...".format(update_path, install_path))
 
                         # Make directories and download file to temporary location
                         os.makedirs(os.path.dirname(install_path), exist_ok=True)
@@ -800,8 +800,10 @@ def main():
                         if target == Targets.CONSENSUS_STATE:
                             os.chmod(install_path, stat.S_IREAD)
 
+                            # Assemble the path to extract the new consensus directory
+                            extract_path = os.path.dirname(install_path)
                             # Assemble the path to the extracted consensus directory
-                            dest_path = os.path.join(os.path.dirname(install_path), 'consensus')
+                            dest_path = os.path.join(extract_path, 'consensus')
 
                             # Remove existing state directory
                             try:
@@ -811,7 +813,7 @@ def main():
 
                             # Extract the tarball
                             with tarfile.open(install_path) as tarball:
-                                tarball.extractall(path=dest_path)
+                                tarball.extractall(path=extract_path)
 
                         # Handle wrapper updates
                         if target == Targets.WRAPPER:
