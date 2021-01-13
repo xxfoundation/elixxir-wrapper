@@ -803,6 +803,7 @@ def main():
                         if target == Targets.GPULIB:
                             os.chmod(install_path, stat.S_IREAD)
 
+                        # Handle GPU bin updates
                         if target == Targets.GPUBIN:
                             os.chmod(install_path, stat.S_IREAD)
 
