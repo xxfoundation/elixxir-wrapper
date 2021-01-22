@@ -800,11 +800,7 @@ def main():
                             os.chmod(install_path, stat.S_IEXEC)
 
                         # Handle GPU library updates
-                        if target == Targets.GPULIB:
-                            os.chmod(install_path, stat.S_IREAD)
-
-                        # Handle GPU bin updates
-                        if target == Targets.GPUBIN:
+                        if target == Targets.GPULIB or target == Targets.GPUBIN:
                             os.chmod(install_path, stat.S_IREAD)
 
                         # Handle consensus state updates
