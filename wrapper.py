@@ -471,6 +471,10 @@ def get_args():
                         default="/opt/xxnetwork/lib/libpowmosm75.so",
                         help="Path to the gpu exponentiation library",
                         required=False)
+    parser.add_argument("--gpubin", type=str,
+                        default="/opt/xxnetwork/lib/libpow.fatbin",
+                        help="Path to the gpu bin file",
+                        required=False)
     parser.add_argument("--disable-consensus", action="store_true",
                         help="Disable consensus binary",
                         default=False, required=False)
@@ -531,6 +535,7 @@ def get_args():
 class Targets:
     BINARY = 'binary'
     GPULIB = 'gpulib'
+    GPUBIN = 'gpubin'
     WRAPPER = 'wrapper'
     CERT = 'cert'
     CONSENSUS_BINARY = 'consensus_binary'
@@ -551,6 +556,7 @@ def main():
 
     binary_path = args["binary"]
     gpulib_path = args["gpulib"]
+    gpubin_path = args["gpubin"]
     management_directory = args["s3path"]
 
     # Hardcoded variables
@@ -591,6 +597,7 @@ def main():
     valid_paths = {
         Targets.BINARY: os.path.abspath(os.path.expanduser(binary_path)),
         Targets.GPULIB: os.path.abspath(os.path.expanduser(gpulib_path)),
+        Targets.GPUBIN: os.path.abspath(os.path.expanduser(gpubin_path)),
         Targets.WRAPPER: os.path.abspath(sys.argv[0]),
         Targets.CERT: rsa_certificate_path,
         Targets.CONSENSUS_BINARY: args["consensus_binary"],
@@ -793,7 +800,7 @@ def main():
                             os.chmod(install_path, stat.S_IEXEC)
 
                         # Handle GPU library updates
-                        if target == Targets.GPULIB:
+                        if target == Targets.GPULIB or target == Targets.GPUBIN:
                             os.chmod(install_path, stat.S_IREAD)
 
                         # Handle consensus state updates
