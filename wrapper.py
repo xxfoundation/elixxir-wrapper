@@ -607,6 +607,8 @@ def main():
     # Record the most recent command timestamp
     # to avoid executing duplicate commands
     timestamps = [0, time.time()]
+    # Record the most recent error timestamp to avoid restart loops
+    last_error_timestamp = 0
 
     # Globally keep track of the main process being wrapped
     process = None
@@ -632,8 +634,10 @@ def main():
     while True:
         time.sleep(command_frequency)
 
-        # If there is a recovered error file present, restart the main process
-        if err_output_path and os.path.isfile(err_output_path):
+        # If there is a (recently modified) recovered error file present, restart the main process
+        if err_output_path \
+                and os.path.isfile(err_output_path) \
+                and os.path.getmtime(err_output_path) > last_error_timestamp:
             log.warning("Restarting binary due to error...")
             time.sleep(10)
             try:
@@ -649,6 +653,7 @@ def main():
                     process = start_binary(valid_paths[Targets.BINARY], log_path, [])
             except IOError as err:
                 log.error(err)
+            last_error_timestamp = time.time()
 
         for i, remote_path in enumerate(remotes_paths):
             try:
