@@ -591,6 +591,9 @@ def main():
     config_override = os.path.abspath(args["configoverride"])
     if os.path.isfile(config_override):
         config_file = config_override
+    elif not os.path.isfile(config_file):
+        log.error("Unable to locate config file at {}. "
+                  "Please specify the correct path using --configoverride".format(config_file))
 
     # The valid "install" paths we can write to, with their local paths for
     # this machine
@@ -646,11 +649,8 @@ def main():
                     terminate_process(process)
 
                 # Restart the main process
-                if os.path.isfile(config_file):
-                    process = start_binary(valid_paths[Targets.BINARY], log_path,
-                                           ["--config", config_file])
-                else:
-                    process = start_binary(valid_paths[Targets.BINARY], log_path, [])
+                process = start_binary(valid_paths[Targets.BINARY], log_path,
+                                       ["--config", config_file])
             except IOError as err:
                 log.error(err)
             last_error_timestamp = time.time()
@@ -716,12 +716,8 @@ def main():
                     if command_type == "start":
                         # Decide which type of binary to start
                         if target == Targets.BINARY and (process is None or process.poll() is not None):
-                            # Decide whether a config file argument need be specified
-                            if os.path.isfile(config_file):
-                                process = start_binary(valid_paths[Targets.BINARY], log_path,
-                                                       ["--config", config_file])
-                            else:
-                                process = start_binary(valid_paths[Targets.BINARY], log_path, [])
+                            process = start_binary(valid_paths[Targets.BINARY], log_path,
+                                                   ["--config", config_file])
                         elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
                                 (consensus_process is None or consensus_process.poll() is not None):
                             consensus_process = start_binary(valid_paths[Targets.CONSENSUS_BINARY], consensus_log,
