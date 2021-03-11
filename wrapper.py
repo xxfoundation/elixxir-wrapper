@@ -593,7 +593,7 @@ def main():
         config_file = config_override
     elif not os.path.isfile(config_file):
         config_file = os.path.expanduser(os.path.join(args["configdir"],
-                                                      os.path.basename(binary_path).replace("xxnetwork-", "" + ".yaml")))
+                                                      os.path.basename(binary_path).replace("xxnetwork-", "") + ".yaml"))
         if not os.path.isfile(config_file):
             log.error("Unable to locate config file at {}. "
                       "Please specify the correct path using --configoverride".format(config_file))
