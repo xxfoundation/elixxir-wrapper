@@ -592,8 +592,11 @@ def main():
     if os.path.isfile(config_override):
         config_file = config_override
     elif not os.path.isfile(config_file):
-        log.error("Unable to locate config file at {}. "
-                  "Please specify the correct path using --configoverride".format(config_file))
+        config_file = os.path.expanduser(os.path.join(args["configdir"],
+                                                      os.path.basename(binary_path).replace("xx-", "")))
+        if not os.path.isfile(config_file):
+            log.error("Unable to locate config file at {}. "
+                      "Please specify the correct path using --configoverride".format(config_file))
 
     # The valid "install" paths we can write to, with their local paths for
     # this machine
