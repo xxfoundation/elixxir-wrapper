@@ -477,7 +477,7 @@ def get_args():
                         required=False)
     parser.add_argument("--disable-consensus", action="store_true",
                         help="Disable consensus binary",
-                        default=False, required=False)
+                        default=True, required=False)
     parser.add_argument("--consensus-binary", type=str,
                         help="Path to the consensus binary",
                         required=False, default="/opt/xxnetwork/bin/xxnetwork-consensus")
