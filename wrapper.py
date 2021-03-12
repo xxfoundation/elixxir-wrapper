@@ -16,12 +16,12 @@ import logging as log
 import os
 import stat
 import subprocess
-import shutil
 import sys
 import threading
 import time
 import uuid
 import boto3
+from botocore.config import Config
 import botocore.exceptions
 import tarfile
 import shutil
@@ -48,10 +48,18 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
     # If there is already a log file, open it here so we don't lose records
     log_file = None
 
+    # Configure boto retries
+    config = Config(
+        retries=dict(
+            max_attempts=50
+        )
+    )
+
     # Setup cloudwatch logs client
     client = boto3.client('logs', region_name=region,
                           aws_access_key_id=access_key_id,
-                          aws_secret_access_key=access_key_secret)
+                          aws_secret_access_key=access_key_secret,
+                          config=config)
 
     # Open the log file read-only and pin its current size if it already exists
     if os.path.isfile(log_file_path):
