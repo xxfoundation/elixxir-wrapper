@@ -27,7 +27,11 @@ import tarfile
 import shutil
 from OpenSSL import crypto
 import hashlib
+import resource
 
+# Set max_files_open to the maximum allowed for this user.
+max_files_open = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+resource.setrlimit(resource.RLIMIT_NOFILE, (max_files_open, max_files_open))
 
 # FUNCTIONS --------------------------------------------------------------------
 
