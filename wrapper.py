@@ -17,7 +17,7 @@ import os
 import stat
 import subprocess
 import sys
-import threading
+import multiprocessing
 import time
 import uuid
 import boto3
@@ -44,6 +44,8 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
     :param region: AWS region
     :param access_key_id: aws access key
     :param access_key_secret: aws secret key
+    :return The newly created logging process
+    :rtype multiprocessing.Process
     """
     # If there is already a log file, open it here so we don't lose records
     log_file = None
@@ -67,11 +69,12 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
         log_file.seek(0, os.SEEK_END)
 
     # Start the log backup service
-    thr = threading.Thread(target=cloudwatch_log,
-                           args=(cloudwatch_log_group, log_file_path,
-                                 id_path, log_file, client))
-    thr.start()
-    return thr
+    log.info("Starting logger for {} at {}...".format(log_file_path, cloudwatch_log_group))
+    process = multiprocessing.Process(target=cloudwatch_log,
+                                      args=(cloudwatch_log_group, log_file_path,
+                                            id_path, log_file, client))
+    process.start()
+    return process
 
 
 def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, client):
@@ -104,8 +107,6 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
         log.error("Failed to init cloudwatch logging for {}: {}".format(cloudwatch_log_group, init_err))
         return
 
-    log.info("Starting cloudwatch logging for {}...".format(cloudwatch_log_group))
-
     last_push_time = time.time()
     last_line_time = time.time()
     while True:
@@ -131,7 +132,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
         log.debug("Current log {} size: {}".format(log_file_path, log_size))
         if log_size > max_size:
             # Close the old log file
-            log.warning("Log {} has reached maximum size: {}. Clearing...".format(log_file_path, log_size))
+            log.info("Log {} has reached maximum size: {}. Clearing...".format(log_file_path, log_size))
             log_file.close()
             # Overwrite the log with an empty file and reopen
             log_file = open(log_file_path, "w+")
@@ -323,7 +324,7 @@ def download(src_path, dst_path, s3_bucket, region,
                                                                     s3_bucket,
                                                                     src_path))
     except Exception as error:
-        log.error("Unable to download {} from S3: {}".format(src_path, error),
+        log.error("Unable to download {} from {}: {}".format(src_path, s3_bucket, error),
                   exc_info=True)
 
 
@@ -351,19 +352,35 @@ def start_binary(bin_path, log_file_path, bin_args):
 
 def terminate_process(p):
     """
-    Terminates the given process.
+    Terminates the given subprocess.
 
     :param p: Process to terminate
     :type p: subprocess.Popen
-    :return: None
-    :rtype: None
     """
-    if p is not None:
+    if p is not None and p.poll() is None:
         pid = p.pid
         log.info("Terminating process {}...".format(pid))
         p.terminate()
         log.info("Process {} terminated with exit code {}".
                  format(pid, p.wait()))
+
+
+def terminate_multiprocess(p):
+    """
+    Terminates the given multiprocess.
+
+    :param p: Process to terminate
+    :type p: multiprocessing.Process
+    """
+    if p is not None and p.is_alive():
+        pid = p.pid
+        log.info("Terminating process {}...".format(pid))
+        p.terminate()
+        while p.is_alive():
+            log.info("Waiting for {} to terminate...".format(pid))
+            time.sleep(0.5)
+        log.info("Process {} terminated with exit code {}".
+                 format(pid, p.exitcode))
 
 
 # generated_uuid is a static cached UUID used as the node_id
@@ -548,6 +565,7 @@ class Targets:
     CERT = 'cert'
     CONSENSUS_BINARY = 'consensus_binary'
     CONSENSUS_STATE = 'consensus_state'
+    LOGGER = 'logger'
 
 
 # MAIN FUNCTION ---------------------------------------------------------------
@@ -628,17 +646,21 @@ def main():
     process = None
     # Globally keep track of the consensus process
     consensus_process = None
+    # Globally keep track of the logging process
+    logging_process = None
+    # Globally keep track of the consensus logging process
+    consensus_logging_process = None
 
     # CONTROL FLOW -----------------------------------------------------------------
 
     # Start the log backup service
     if not args["disable_cloudwatch"]:
-        start_cw_logger(args["cloudwatch_log_group"], log_path,
-                        args["idpath"], s3_bucket_region,
-                        s3_access_key_id, s3_access_key_secret)
+        logging_process = start_cw_logger(args["cloudwatch_log_group"], log_path,
+                                          args["idpath"], s3_bucket_region,
+                                          s3_access_key_id, s3_access_key_secret)
         if not args["disable_consensus"] and management_directory == "server":
-            start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
-                            s3_access_key_id, s3_access_key_secret)
+            consensus_logging_process = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
+                                                        s3_access_key_id, s3_access_key_secret)
 
     # Frequency (in seconds) of checking for new commands
     command_frequency = 10
@@ -734,6 +756,17 @@ def main():
                             consensus_process = start_binary(valid_paths[Targets.CONSENSUS_BINARY], consensus_log,
                                                              ["--config", consensus_config,
                                                               "--cmixconfig", config_file])
+                        elif target == Targets.LOGGER:
+                            if not args["disable_cloudwatch"] \
+                                    and (logging_process is None or not logging_process.is_alive()):
+                                logging_process = start_cw_logger(args["cloudwatch_log_group"], log_path,
+                                                                  args["idpath"], s3_bucket_region,
+                                                                  s3_access_key_id, s3_access_key_secret)
+                            if not args["disable_consensus"] and management_directory == "server" \
+                                    and (consensus_logging_process is None or not consensus_logging_process.is_alive()):
+                                consensus_logging_process = start_cw_logger(consensus_grp, consensus_log,
+                                                                            args["idpath"], s3_bucket_region,
+                                                                            s3_access_key_id, s3_access_key_secret)
 
                     # STOP COMMAND ===========================
                     elif command_type == "stop":
@@ -742,6 +775,9 @@ def main():
                             terminate_process(process)
                         elif target == Targets.CONSENSUS_BINARY:
                             terminate_process(consensus_process)
+                        elif target == Targets.LOGGER:
+                            terminate_multiprocess(logging_process)
+                            terminate_multiprocess(consensus_logging_process)
 
                     # DELAY COMMAND ===========================
                     elif command_type == "delay":
