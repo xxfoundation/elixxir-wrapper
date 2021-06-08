@@ -140,6 +140,21 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
                 log_file_path, os.path.getsize(log_file_path)))
 
 
+def disable_tcp_slow_start_after_idle():
+    """
+    Disables tcp_slow_start_after_idle by setting to 0, or prints a warning if
+    it cannot be set. This value is important for lowering latency during
+    realtime, and can alternately be fixed by setting your initcwnd to 700:
+
+      sudo ip route change default via 192.168.20.140 dev enp0s31f6 initcwnd 700 initrwnd 700
+    """
+    try:
+        with open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'w') as tssai:
+            tssai.write('0')
+    except e:
+        log.error('Could not disable tcp_slow_start_after_idle: {}', e)
+
+
 def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     """
     Initialize client for cloudwatch logging
@@ -661,6 +676,8 @@ def main():
         if not args["disable_consensus"] and management_directory == "server":
             consensus_logging_process = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
                                                         s3_access_key_id, s3_access_key_secret)
+
+    disable_tcp_slow_start_after_idle()
 
     # Frequency (in seconds) of checking for new commands
     command_frequency = 10
