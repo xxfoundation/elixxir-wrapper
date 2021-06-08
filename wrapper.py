@@ -147,7 +147,7 @@ def check_networking():
     """
     ipcmd = [
         "sudo ip route change `ip route | grep \"^default\" | head -1` initcwnd 700 initrwnd 700",
-        "sudo echo \"ip route change \`ip route | grep \\\"^default\\\" | head -1\` initcwnd 700 initrwnd 700\" > /etc/rc.local"
+        "sudo echo \"ip route change \`ip route | grep \\\"^default\\\" | head -1\` initcwnd 700 initrwnd 700\" >> /etc/rc.local"
     ]
     slowcmd = [
         "sudo echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle",
