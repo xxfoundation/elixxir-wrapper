@@ -145,30 +145,25 @@ def check_networking():
     check_networking checks for networking settings essential for operation of
     cMix.
     """
-    ipcmd = [
-        "sudo ip route change `ip route | grep \"^default\" | head -1` initcwnd 700 initrwnd 700",
-        "sudo echo \"ip route change \`ip route | grep \\\"^default\\\" | head -1\` initcwnd 700 initrwnd 700\" >> /etc/rc.local"
-    ]
     slowcmd = [
-        "sudo echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle",
-        "sudo echo \"net.ipv4.tcp_slow_start_after_idle=0\" >> /etc/sysctl.conf"
+        "sudo /bin/bash -c \"echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle\"",
+        "sudo /bin/bash -c \'echo \"net.ipv4.tcp_slow_start_after_idle=0\" >> /etc/sysctl.conf\'"
     ]
-
     networking_good = True
-    slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().trim()
+    slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().strip()
     if '0' not in slowsetting:
-        log.warn('tcp_slow_start_after_idle should be disabled, run: {}'.format(
-                  '\n\t'.join(slowcmd)))
+        log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format(
+                    '\n\t'.join(slowcmd)))
         networking_good = False
-
-    ipsetting = subprocess.run(['ip', 'route', 'show'], capture_output=True).stdout
-    if 'initcwnd 700' not in ipsetting or 'initrwnd 700' not in ipsetting:
-        log.warn('ip settings should set initrwnd and initcwnd, run: \n\t{}'.format(
-                 '\n\t'.join(ipcmd)))
-        # Note: We don't set networking to bad here, because only the slow start
-        # setting is required.
-        # networking_good = False
-
+    else:
+        networking_good = True
+    # Alternatively, if the initial windows are 700, that's acceptable
+    # too.
+    if not networking_good:
+        ipsetting = subprocess.run(['ip', 'route', 'show'], capture_output=True)
+        ipsettingout = ipsetting.stdout.decode('utf-8')
+        if 'initcwnd 700' in ipsettingout and 'initrwnd 700' in ipsettingout:
+            networking_good = True
     return networking_good
 
 
