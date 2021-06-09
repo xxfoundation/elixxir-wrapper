@@ -160,7 +160,7 @@ def check_networking():
     # Alternatively, if the initial windows are 700, that's acceptable
     # too.
     if not networking_good:
-        ipsetting = subprocess.run(['ip', 'route', 'show'], capture_output=True)
+        ipsetting = subprocess.run(['ip', 'route', 'show'], stdout=subprocess.PIPE)
         ipsettingout = ipsetting.stdout.decode('utf-8')
         if 'initcwnd 700' in ipsettingout and 'initrwnd 700' in ipsettingout:
             networking_good = True
