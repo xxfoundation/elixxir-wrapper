@@ -698,14 +698,6 @@ def main():
     while True:
         time.sleep(command_frequency)
 
-        if not is_networking_good:
-            is_networking_good = check_networking()
-            log.error("Unacceptable network settings, refusing to start. "
-                      "Run the suggested commands")
-            continue
-
-
-
         # If there is a (recently modified) recovered error file present, restart the main process
         if err_output_path \
                 and os.path.isfile(err_output_path) \
@@ -783,6 +775,14 @@ def main():
 
                     # START COMMAND ===========================
                     if command_type == "start":
+
+                        # Ensure network settings are properly configured before allowing a start
+                        if not check_networking():
+                            log.error("Unacceptable network settings, refusing to start. "
+                                      "Run the suggested commands")
+                            timestamps[i] = timestamp
+                            continue
+
                         # Decide which type of binary to start
                         if target == Targets.BINARY and (process is None or process.poll() is not None):
                             process = start_binary(valid_paths[Targets.BINARY], log_path,
