@@ -689,11 +689,9 @@ def main():
             consensus_logging_process = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
                                                         s3_access_key_id, s3_access_key_secret)
 
-
     # Frequency (in seconds) of checking for new commands
     command_frequency = 10
     log.info("Script initialized at {}".format(time.time()))
-    is_networking_good = check_networking()
     # Main command/control loop
     while True:
         time.sleep(command_frequency)
