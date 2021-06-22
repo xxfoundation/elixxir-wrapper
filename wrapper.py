@@ -513,7 +513,7 @@ def get_args():
     parser.add_argument("--s3-management-bucket", type=str, required=True,
                         help="S3 management bucket name")
     parser.add_argument("--s3-bin-bucket", type=str, required=True,
-                        help="S3 bins bucket name")
+                        help="S3 binary bucket name")
     parser.add_argument("--s3-access-key", type=str, required=True,
                         help="S3 access key")
     parser.add_argument("--s3-secret", type=str, required=True,
@@ -542,7 +542,7 @@ def get_args():
                         default="/opt/xxnetwork/logs/wrapper.log")
 
     # Elixxir arguments
-    parser.add_argument("--binary", type=str, required=True,
+    parser.add_argument("--binary-path", type=str, required=True,
                         help="Path of the Elixxir binary")
     parser.add_argument("--config-path", type=str, required=True,
                         help="Path of the Elixxir config file")
@@ -575,8 +575,16 @@ def get_args():
     parser.add_argument("--consensus-cw-group", type=str, required=False,
                         help="Log group for Consensus CloudWatch logging",
                         default="xxnetwork-consensus-prod")
+    parser.add_argument("--consensus-url", type=str, required=False,
+                        help="Listening address for blockchain-provided binary updates",
+                        default="ws://localhost:30334")
 
     args, unknown = parser.parse_known_args()
+
+    # Configure logger
+    log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
+                    level=log.INFO, datefmt='%d-%b-%y %H:%M:%S',
+                    filename=args["wrapper_log"])
 
     # Handle unknown args
     if len(unknown) > 0:
@@ -601,14 +609,11 @@ class Targets:
 
 
 def main():
-    # Configure logger
-    log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
-                    level=log.INFO, datefmt='%d-%b-%y %H:%M:%S')
-
     # Command line arguments
     args = get_args()
     log.info("Running with configuration: {}".format(args))
-    binary_path = args["binary"]
+
+    binary_path = args["binary_path"]
     gpulib_path = args["gpu_lib"]
     gpubin_path = args["gpu_bin"]
     management_directory = args["s3_path"]
@@ -618,16 +623,22 @@ def main():
     s3_access_key_secret = args["s3_secret"]
     s3_bucket_region = args["s3_region"]
     log_path = args["log_path"]
+    wrapper_log_path = args["wrapper_log"]
     err_output_path = args["err_path"]
+    id_path = args["idpath"]
     version_file = management_directory + "/version.jsonl"
     command_file = management_directory + "/command.jsonl"
     tmp_dir = args["tmp_dir"]
     os.makedirs(tmp_dir, exist_ok=True)
     cmd_log_dir = args["cmd_dir"]
+    log_grp = args["cloudwatch_log_group"]
+    consensus_binary = args["consensus_binary"]
     consensus_log = args["consensus_log"]
     consensus_grp = args["consensus_cw_group"]
     consensus_config = args["consensus_config"]
     config_file = args["config_path"]
+    disable_consensus = args["disable_consensus"]
+    disable_cloudwatch = args["disable_cloudwatch"]
 
     # The valid "install" paths we can write to, with their local paths for
     # this machine
@@ -637,7 +648,7 @@ def main():
         Targets.GPUBIN: os.path.abspath(os.path.expanduser(gpubin_path)),
         Targets.WRAPPER: os.path.abspath(sys.argv[0]),
         Targets.CERT: rsa_certificate_path,
-        Targets.CONSENSUS_BINARY: args["consensus_binary"],
+        Targets.CONSENSUS_BINARY: consensus_binary,
     }
 
     # Record the most recent command timestamp
@@ -650,21 +661,26 @@ def main():
     process = None
     # Globally keep track of the consensus process
     consensus_process = None
-    # Globally keep track of the logging process
+    # Globally keep track of the Elixxir logging process
     logging_process = None
+    # Globally keep track of the wrapper logging process
+    wrapper_logging_process = None
     # Globally keep track of the consensus logging process
     consensus_logging_process = None
 
     # CONTROL FLOW -----------------------------------------------------------------
 
     # Start the log backup service
-    if not args["disable_cloudwatch"]:
-        logging_process = start_cw_logger(args["cloudwatch_log_group"], log_path,
-                                          args["idpath"], s3_bucket_region,
+    if not disable_cloudwatch:
+        logging_process = start_cw_logger(log_grp, log_path,
+                                          id_path, s3_bucket_region,
                                           s3_access_key_id, s3_access_key_secret)
-        if not args["disable_consensus"] and management_directory == "server":
+        wrapper_logging_process = start_cw_logger(log_grp, wrapper_log_path,
+                                                  id_path, s3_bucket_region,
+                                                  s3_access_key_id, s3_access_key_secret)
+        if not disable_consensus and management_directory == "server":
             consensus_logging_process = start_cw_logger(consensus_grp, consensus_log,
-                                                        args["idpath"], s3_bucket_region,
+                                                        id_path, s3_bucket_region,
                                                         s3_access_key_id, s3_access_key_secret)
 
     # Frequency (in seconds) of checking for new commands
@@ -731,7 +747,7 @@ def main():
                     continue
 
                 # Note: We get the UUID for every valid command in case it changes
-                node_id = get_node_id(args["idpath"])
+                node_id = get_node_id(id_path)
 
                 # Execute the commands in sequence
                 for command in signed_commands.get("commands", list()):
@@ -764,21 +780,24 @@ def main():
                         if target == Targets.BINARY and (process is None or process.poll() is not None):
                             process = start_binary(valid_paths[Targets.BINARY], log_path,
                                                    ["--config", config_file])
-                        elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
+                        elif not disable_consensus and target == Targets.CONSENSUS_BINARY and \
                                 (consensus_process is None or consensus_process.poll() is not None):
                             consensus_process = start_binary(valid_paths[Targets.CONSENSUS_BINARY], consensus_log,
                                                              ["--config", consensus_config,
                                                               "--cmixconfig", config_file])
                         elif target == Targets.LOGGER:
-                            if not args["disable_cloudwatch"] \
+                            if not disable_cloudwatch \
                                     and (logging_process is None or not logging_process.is_alive()):
-                                logging_process = start_cw_logger(args["cloudwatch_log_group"], log_path,
-                                                                  args["idpath"], s3_bucket_region,
+                                logging_process = start_cw_logger(log_grp, log_path,
+                                                                  id_path, s3_bucket_region,
                                                                   s3_access_key_id, s3_access_key_secret)
-                            if not args["disable_consensus"] and management_directory == "server" \
+                                wrapper_logging_process = start_cw_logger(log_grp, wrapper_log_path,
+                                                                          id_path, s3_bucket_region,
+                                                                          s3_access_key_id, s3_access_key_secret)
+                            if not disable_consensus and management_directory == "server" \
                                     and (consensus_logging_process is None or not consensus_logging_process.is_alive()):
                                 consensus_logging_process = start_cw_logger(consensus_grp, consensus_log,
-                                                                            args["idpath"], s3_bucket_region,
+                                                                            id_path, s3_bucket_region,
                                                                             s3_access_key_id, s3_access_key_secret)
 
                     # STOP COMMAND ===========================
@@ -790,6 +809,7 @@ def main():
                             terminate_process(consensus_process)
                         elif target == Targets.LOGGER:
                             terminate_multiprocess(logging_process)
+                            terminate_multiprocess(wrapper_logging_process)
                             terminate_multiprocess(consensus_logging_process)
 
                     # DELAY COMMAND ===========================
@@ -803,15 +823,9 @@ def main():
                     # UPDATE COMMAND ===========================
                     elif command_type == "update":
 
-                        # Handle disabled updates flag
-                        if args["disableupdates"]:
-                            log.error("Update command ignored, updates disabled!")
-                            timestamps[i] = timestamp
-                            continue
-
                         # Handle disabled consensus flag
-                        if (target == Targets.CONSENSUS_BINARY or target == Targets.CONSENSUS_STATE) \
-                                and args["disable_consensus"]:
+                        if (target == Targets.CONSENSUS_BINARY) \
+                                and disable_consensus:
                             log.error("Update command ignored, consensus disabled!")
                             timestamps[i] = timestamp
                             continue
@@ -863,25 +877,6 @@ def main():
                         # Handle GPU library updates
                         if target == Targets.GPULIB or target == Targets.GPUBIN:
                             os.chmod(install_path, stat.S_IREAD)
-
-                        # Handle consensus state updates
-                        if target == Targets.CONSENSUS_STATE:
-                            os.chmod(install_path, stat.S_IREAD)
-
-                            # Assemble the path to extract the new consensus directory
-                            extract_path = os.path.dirname(install_path)
-                            # Assemble the path to the extracted consensus directory
-                            dest_path = os.path.join(extract_path, 'consensus')
-
-                            # Remove existing state directory
-                            try:
-                                shutil.rmtree(dest_path)
-                            except OSError as e:
-                                log.error("Unable to remove {}: {}".format(dest_path, e))
-
-                            # Extract the tarball
-                            with tarfile.open(install_path) as tarball:
-                                tarball.extractall(path=extract_path)
 
                         # Handle wrapper updates
                         if target == Targets.WRAPPER:
