@@ -601,7 +601,6 @@ class Targets:
     GPUBIN = 'gpubin'
     WRAPPER = 'wrapper'
     CERT = 'cert'
-    CONSENSUS_BINARY = 'consensus_binary'
     LOGGER = 'logger'
 
 
@@ -648,7 +647,6 @@ def main():
         Targets.GPUBIN: os.path.abspath(os.path.expanduser(gpubin_path)),
         Targets.WRAPPER: os.path.abspath(sys.argv[0]),
         Targets.CERT: rsa_certificate_path,
-        Targets.CONSENSUS_BINARY: consensus_binary,
     }
 
     # Record the most recent command timestamp
@@ -659,8 +657,6 @@ def main():
 
     # Globally keep track of the main process being wrapped
     process = None
-    # Globally keep track of the consensus process
-    consensus_process = None
     # Globally keep track of the Elixxir logging process
     logging_process = None
     # Globally keep track of the wrapper logging process
@@ -780,11 +776,6 @@ def main():
                         if target == Targets.BINARY and (process is None or process.poll() is not None):
                             process = start_binary(valid_paths[Targets.BINARY], log_path,
                                                    ["--config", config_file])
-                        elif not disable_consensus and target == Targets.CONSENSUS_BINARY and \
-                                (consensus_process is None or consensus_process.poll() is not None):
-                            consensus_process = start_binary(valid_paths[Targets.CONSENSUS_BINARY], consensus_log,
-                                                             ["--config", consensus_config,
-                                                              "--cmixconfig", config_file])
                         elif target == Targets.LOGGER:
                             if not disable_cloudwatch \
                                     and (logging_process is None or not logging_process.is_alive()):
@@ -805,8 +796,6 @@ def main():
                         # Stop the wrapped process
                         if target == Targets.BINARY:
                             terminate_process(process)
-                        elif target == Targets.CONSENSUS_BINARY:
-                            terminate_process(consensus_process)
                         elif target == Targets.LOGGER:
                             terminate_multiprocess(logging_process)
                             terminate_multiprocess(wrapper_logging_process)
@@ -822,13 +811,6 @@ def main():
 
                     # UPDATE COMMAND ===========================
                     elif command_type == "update":
-
-                        # Handle disabled consensus flag
-                        if (target == Targets.CONSENSUS_BINARY) \
-                                and disable_consensus:
-                            log.error("Update command ignored, consensus disabled!")
-                            timestamps[i] = timestamp
-                            continue
 
                         # Verify valid install path
                         if target not in valid_paths.keys():
@@ -871,7 +853,7 @@ def main():
                             continue
 
                         # Handle binary updates
-                        if target == Targets.BINARY or target == Targets.CONSENSUS_BINARY:
+                        if target == Targets.BINARY:
                             os.chmod(install_path, stat.S_IEXEC)
 
                         # Handle GPU library updates
