@@ -140,33 +140,6 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
                 log_file_path, os.path.getsize(log_file_path)))
 
 
-def check_networking():
-    """
-    check_networking checks for networking settings essential for operation of
-    cMix.
-    """
-    slowcmd = [
-        "sudo /bin/bash -c \"echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle\"",
-        "sudo /bin/bash -c \'echo \"net.ipv4.tcp_slow_start_after_idle=0\" >> /etc/sysctl.conf\'"
-    ]
-    networking_good = True
-    slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().strip()
-    if '0' not in slowsetting:
-        log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format(
-                    '\n\t'.join(slowcmd)))
-        networking_good = False
-    else:
-        networking_good = True
-    # Alternatively, if the initial windows are 700, that's acceptable
-    # too.
-    if not networking_good:
-        ipsetting = subprocess.run(['ip', 'route', 'show'], stdout=subprocess.PIPE)
-        ipsettingout = ipsetting.stdout.decode('utf-8')
-        if 'initcwnd 700' in ipsettingout and 'initrwnd 700' in ipsettingout:
-            networking_good = True
-    return networking_good
-
-
 def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     """
     Initialize client for cloudwatch logging
@@ -318,6 +291,33 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
     finally:
         # Always return upload sequence token - dropping this causes lots of errors
         return upload_sequence_token, ok
+
+
+def check_networking():
+    """
+    check_networking checks for networking settings essential for operation of
+    cMix.
+    """
+    slowcmd = [
+        "sudo /bin/bash -c \"echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle\"",
+        "sudo /bin/bash -c \'echo \"net.ipv4.tcp_slow_start_after_idle=0\" >> /etc/sysctl.conf\'"
+    ]
+    networking_good = True
+    slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().strip()
+    if '0' not in slowsetting:
+        log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format(
+            '\n\t'.join(slowcmd)))
+        networking_good = False
+    else:
+        networking_good = True
+    # Alternatively, if the initial windows are 700, that's acceptable
+    # too.
+    if not networking_good:
+        ipsetting = subprocess.run(['ip', 'route', 'show'], stdout=subprocess.PIPE)
+        ipsettingout = ipsetting.stdout.decode('utf-8')
+        if 'initcwnd 700' in ipsettingout and 'initrwnd 700' in ipsettingout:
+            networking_good = True
+    return networking_good
 
 
 def download(src_path, dst_path, s3_bucket, region,
@@ -506,72 +506,75 @@ def get_args():
     :return arguments in dict format:
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--disableupdates", action="store_true",
-                        help="Disable automatic updates",
-                        default=False, required=False)
-    parser.add_argument("-l", "--logpath", type=str, default="/opt/xxnetwork/logs/xx.log",
-                        help="The path to store logs, e.g. /opt/xxnetwork/node-logs/node.log",
-                        required=False)
-    parser.add_argument("-i", "--idpath", type=str,
-                        default="/opt/xxnetwork/logs/IDF.json",
-                        help="Node ID path, e.g. /opt/xxnetwork/logs/nodeIDF.json",
-                        required=False)
-    parser.add_argument("-b", "--binary", type=str,
-                        help="Path of the binary to be run by the wrapper",
-                        required=True)
-    parser.add_argument("--gpulib", type=str,
-                        default="/opt/xxnetwork/lib/libpowmosm75.so",
-                        help="Path to the gpu exponentiation library",
-                        required=False)
-    parser.add_argument("--gpubin", type=str,
-                        default="/opt/xxnetwork/lib/libpow.fatbin",
-                        help="Path to the gpu bin file",
-                        required=False)
-    parser.add_argument("--disable-consensus", action="store_true",
-                        help="Disable consensus binary",
-                        default=True, required=False)
-    parser.add_argument("--consensus-binary", type=str,
-                        help="Path to the consensus binary",
-                        required=False, default="/opt/xxnetwork/bin/xxnetwork-consensus")
-    parser.add_argument("--consensus-config", type=str,
-                        help="Path to the consensus config file",
-                        required=False, default="/opt/xxnetwork/consensus.yaml")
-    parser.add_argument("--consensus-state", type=str,
-                        help="Path to the consensus state tarball",
-                        required=False, default="/opt/xxnetwork/consensus.tar.gz")
-    parser.add_argument("--consensus-log", type=str,
-                        help="Path to the consensus log file",
-                        required=False, default="/opt/xxnetwork/consensus-logs/consensus.log")
-    parser.add_argument("--consensus-cw-group", type=str,
-                        help="CW log group for consensus logs",
-                        required=False, default="xxnetwork-consensus-prod")
-    parser.add_argument("-c", "--configdir", type=str, required=False,
-                        help="Path to the config dir, e.g., ~/.xxnetwork/",
-                        default="/opt/xxnetwork/")
-    parser.add_argument("-s", "--s3path", type=str, required=True,
-                        help="Path to the s3 management directory")
-    parser.add_argument("-m", "--s3managementbucket", type=str,
-                        help="Path to the s3 management bucket name")
-    parser.add_argument("--disable-cloudwatch", action="store_true",
+
+    # Management arguments
+    parser.add_argument("--s3-path", type=str, required=True,
+                        help="S3 management directory")
+    parser.add_argument("--s3-management-bucket", type=str, required=True,
+                        help="S3 management bucket name")
+    parser.add_argument("--s3-bin-bucket", type=str, required=True,
+                        help="S3 bins bucket name")
+    parser.add_argument("--s3-access-key", type=str, required=True,
+                        help="S3 access key")
+    parser.add_argument("--s3-secret", type=str, required=True,
+                        help="S3 access key secret")
+    parser.add_argument("--s3-region", type=str, required=True,
+                        help="S3 region")
+
+    # Wrapper arguments
+    parser.add_argument("--disable-consensus", action="store_true", required=False,
+                        help="Disable Consensus integration (For test environments only)",
+                        default=False)
+    parser.add_argument("--disable-cloudwatch", action="store_true", required=False,
                         help="Disable uploading log events to CloudWatch",
-                        default=False, required=False)
-    parser.add_argument("--cloudwatch-log-group", type=str,
+                        default=False)
+    parser.add_argument("--management-cert", type=str, required=False,
+                        help="Path of the management certificate file",
+                        default="/opts/xxnetwork/creds/network_management.crt")
+    parser.add_argument("--tmp-dir", type=str, required=False,
+                        help="Directory for placing temporary files",
+                        default="/tmp")
+    parser.add_argument("--cmd-dir", type=str, required=False,
+                        help="Directory used for saving command file history",
+                        default="/opt/xxnetwork/logs/cmdlog")
+    parser.add_argument("--wrapper-log", type=str, required=False,
+                        help="Path of the wrapper log file",
+                        default="/opt/xxnetwork/logs/wrapper.log")
+
+    # Elixxir arguments
+    parser.add_argument("--binary", type=str, required=True,
+                        help="Path of the Elixxir binary")
+    parser.add_argument("--config-path", type=str, required=True,
+                        help="Path of the Elixxir config file")
+    parser.add_argument("--log-path", type=str, required=False,
+                        default="/opt/xxnetwork/logs/xx.log",
+                        help="Path of the Elixxir log file")
+    parser.add_argument("--gpu-lib", type=str, required=False,
+                        default="/opt/xxnetwork/lib/libpowmosm75.so",
+                        help="Path of the GPU exponentiation library")
+    parser.add_argument("--gpu-bin", type=str, required=False,
+                        default="/opt/xxnetwork/lib/libpow.fatbin",
+                        help="Path of the GPU bin file")
+    parser.add_argument("--id-path", type=str, required=False,
+                        default="/opt/xxnetwork/logs/IDF.json",
+                        help="Path of the Elixxir ID file")
+    parser.add_argument("--err-path", type=str, required=False,
+                        help="Path of the Elixxir error recovery file",
+                        default="/opt/xxnetwork/node-logs/node-err.log")
+    parser.add_argument("--cloudwatch-log-group", type=str, required=False,
                         help="Log group for CloudWatch logging",
                         default="xxnetwork-logs-prod")
-    parser.add_argument("--s3accesskey", type=str, required=True,
-                        help="s3 access key")
-    parser.add_argument("--s3secret", type=str, required=True,
-                        help="s3 access key secret")
-    parser.add_argument("--s3region", type=str, required=True,
-                        help="s3 region")
-    parser.add_argument("--tmpdir", type=str, required=False,
-                        help="directory for temp files", default="/tmp")
-    parser.add_argument("--cmdlogdir", type=str, required=False,
-                        help="directory for commands log", default="/opt/xxnetwork/cmdlog")
-    parser.add_argument("--erroutputpath", type=str, required=False,
-                        help="Path to recovered error path", default=None)
-    parser.add_argument("--configoverride", type=str, required=False,
-                        help="Override for config file path", default="")
+
+    # Consensus arguments
+    parser.add_argument("--consensus-binary", type=str, required=False,
+                        help="Path of the Consensus binary",
+                        default="/opt/xxnetwork/bin/xxnetwork-consensus")
+    parser.add_argument("--consensus-log", type=str, required=False,
+                        help="Path of the Consensus log file",
+                        default="/opt/xxnetwork/logs/consensus.log")
+    parser.add_argument("--consensus-cw-group", type=str, required=False,
+                        help="Log group for Consensus CloudWatch logging",
+                        default="xxnetwork-consensus-prod")
 
     args, unknown = parser.parse_known_args()
 
@@ -591,7 +594,6 @@ class Targets:
     WRAPPER = 'wrapper'
     CERT = 'cert'
     CONSENSUS_BINARY = 'consensus_binary'
-    CONSENSUS_STATE = 'consensus_state'
     LOGGER = 'logger'
 
 
@@ -606,50 +608,26 @@ def main():
     # Command line arguments
     args = get_args()
     log.info("Running with configuration: {}".format(args))
-
     binary_path = args["binary"]
-    gpulib_path = args["gpulib"]
-    gpubin_path = args["gpubin"]
-    management_directory = args["s3path"]
-
-    # Hardcoded variables
-    rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"], "creds",
-                                                           "network_management.crt"))
-    if not os.path.exists(rsa_certificate_path):  # check creds dir for file as well
-        rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
-                                                               "network_management.crt"))
-
-    s3_management_bucket_name = args["s3managementbucket"]
-    s3_access_key_id = args["s3accesskey"]
-    s3_access_key_secret = args["s3secret"]
-    s3_bucket_region = args["s3region"]
-    log_path = args["logpath"]
-    os.makedirs(os.path.dirname(args["logpath"]), exist_ok=True)
-
-    err_output_path = args["erroutputpath"]
+    gpulib_path = args["gpu_lib"]
+    gpubin_path = args["gpu_bin"]
+    management_directory = args["s3_path"]
+    rsa_certificate_path = args["management_cert"]
+    s3_management_bucket_name = args["s3_bucket"]
+    s3_access_key_id = args["s3_access_key"]
+    s3_access_key_secret = args["s3_secret"]
+    s3_bucket_region = args["s3_region"]
+    log_path = args["log_path"]
+    err_output_path = args["err_path"]
     version_file = management_directory + "/version.jsonl"
     command_file = management_directory + "/command.jsonl"
-    tmp_dir = args["tmpdir"]
+    tmp_dir = args["tmp_dir"]
     os.makedirs(tmp_dir, exist_ok=True)
-    remotes_paths = [version_file, command_file]
-    cmd_log_dir = args["cmdlogdir"]
-
+    cmd_log_dir = args["cmd_dir"]
     consensus_log = args["consensus_log"]
     consensus_grp = args["consensus_cw_group"]
     consensus_config = args["consensus_config"]
-
-    # Config file is the binaryname.yaml inside the config directory
-    config_file = os.path.expanduser(os.path.join(
-        args["configdir"], os.path.basename(binary_path) + ".yaml"))
-    config_override = os.path.abspath(args["configoverride"])
-    if os.path.isfile(config_override):
-        config_file = config_override
-    elif not os.path.isfile(config_file):
-        config_file = os.path.expanduser(os.path.join(args["configdir"],
-                                                      os.path.basename(binary_path).replace("xxnetwork-", "") + ".yaml"))
-        if not os.path.isfile(config_file):
-            log.error("Unable to locate config file at {}. "
-                      "Please specify the correct path using --configoverride".format(config_file))
+    config_file = args["config_path"]
 
     # The valid "install" paths we can write to, with their local paths for
     # this machine
@@ -660,7 +638,6 @@ def main():
         Targets.WRAPPER: os.path.abspath(sys.argv[0]),
         Targets.CERT: rsa_certificate_path,
         Targets.CONSENSUS_BINARY: args["consensus_binary"],
-        Targets.CONSENSUS_STATE: args["consensus_state"]
     }
 
     # Record the most recent command timestamp
@@ -686,13 +663,15 @@ def main():
                                           args["idpath"], s3_bucket_region,
                                           s3_access_key_id, s3_access_key_secret)
         if not args["disable_consensus"] and management_directory == "server":
-            consensus_logging_process = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
+            consensus_logging_process = start_cw_logger(consensus_grp, consensus_log,
+                                                        args["idpath"], s3_bucket_region,
                                                         s3_access_key_id, s3_access_key_secret)
 
     # Frequency (in seconds) of checking for new commands
     command_frequency = 10
     log.info("Script initialized at {}".format(time.time()))
     # Main command/control loop
+    remotes_paths = [version_file, command_file]
     while True:
         time.sleep(command_frequency)
 
