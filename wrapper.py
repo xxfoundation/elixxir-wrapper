@@ -58,35 +58,22 @@ def get_substrate_provider(consensus_url):
         return None
 
 
-def poll_cmix_hashes(consensus_url):
+def poll_cmix_hashes(substrate):
     """
     Polling Substrate Chain information to feed cmix with the current cmix hashes
-    :param consensus_url: listening address:port of the substrate server
+    :param substrate: The active substrate connection
     :return: dictionary with cmix hashes
     """
-    polling_freq = 10  # in seconds
-    # Initialize substrate connection
-    substrate = get_substrate_provider(consensus_url)
-
-    # Begin query loop
-    while True:
-        # Handle lost connections
-        while substrate is None:
-            time.sleep(polling_freq)
-            substrate = get_substrate_provider(consensus_url)
-
-        # Send a poll to the blockchain every polling_freq seconds
-        time.sleep(polling_freq)
-        try:
-            cmix_hashes = substrate.query(
-                module='XXNetwork',
-                storage_function='CmixHashes',
-                params=[]
-            )
-            return cmix_hashes
-        except Exception as e:
-            log.error("Connection lost while in \'substrate.query(\"XXNetwork\", \"CmixHashes\")\'. Error: %s" % e)
-            substrate = None
+    try:
+        cmix_hashes = substrate.query(
+            module='XXNetwork',
+            storage_function='CmixHashes',
+            params=[]
+        )
+        return cmix_hashes
+    except Exception as e:
+        log.error("Connection lost while in \'substrate.query(\"XXNetwork\", \"CmixHashes\")\'. Error: %s" % e)
+        return None
 
 
 ########################################################################################################################
@@ -409,6 +396,7 @@ def download(src_path, dst_path, s3_bucket, region,
     :rtype: None
     """
     try:
+        log.info("Downloading file at {} to {}...".format(src_path, dst_path))
         s3 = boto3.Session(
             aws_access_key_id=access_key_id,
             aws_secret_access_key=access_key_secret,
@@ -420,6 +408,52 @@ def download(src_path, dst_path, s3_bucket, region,
     except Exception as error:
         log.error("Unable to download {} from {}: {}".format(src_path, s3_bucket, error),
                   exc_info=True)
+
+
+def update(target, tmp_path, install_path, expected_hash):
+    """
+    Update the current file with a staged file, assuming hashes match
+
+    :param target: Update type as defined by Targets class
+    :param tmp_path: Staged update file
+    :param install_path: Path to update the staged file over
+    :param expected_hash: Hash that is expected to match the staged file
+    :return: True if update successful, else false
+    """
+    # Ensure the hash of the downloaded file matches the hash in the command
+    update_bytes = bytes(open(tmp_path, 'rb').read())
+    actual_hash = hashlib.sha256(update_bytes).hexdigest()
+    if actual_hash != expected_hash:
+        os.remove(path=tmp_path)
+        log.error("Downloaded file {} does not match provided hash. Expected {}, got {}".format(
+            tmp_path, expected_hash, actual_hash))
+        return False
+
+    # Move the downloaded file into place, overwriting anything that's there
+    try:
+        os.makedirs(os.path.dirname(install_path), exist_ok=True)
+        os.replace(tmp_path, install_path)
+    except Exception as err:
+        log.error("Could not overwrite {} with {}: {}".format(
+            install_path, tmp_path, err))
+        return False
+
+    # Handle binary updates
+    if target == Targets.BINARY:
+        os.chmod(install_path, stat.S_IEXEC)
+
+    # Handle GPU library updates
+    if target == Targets.GPULIB or target == Targets.GPUBIN:
+        os.chmod(install_path, stat.S_IREAD)
+
+    # Handle wrapper updates
+    if target == Targets.WRAPPER:
+        os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
+        log.info("Wrapper script updated, exiting now...")
+        os._exit(0)
+
+    # Return successfully
+    return True
 
 
 def start_binary(bin_path, log_file_path, bin_args):
@@ -733,6 +767,10 @@ def main():
     wrapper_logging_process = None
     # Globally keep track of the consensus logging process
     consensus_logging_process = None
+    # Globally keep track of the substrate connection
+    substrate = None
+    # Keep track of current binary hashes for blockchain updates
+    current_hashes = dict()
 
     # CONTROL FLOW -----------------------------------------------------------------
 
@@ -756,6 +794,92 @@ def main():
     remotes_paths = [version_file, command_file]
     while True:
         time.sleep(command_frequency)
+
+        # Handle updates from blockchain
+        if not disable_consensus:
+            if substrate is None:
+                # Handle lost connections
+                substrate = get_substrate_provider(consensus_url)
+            else:
+                # Poll for hashes
+                hashes = poll_cmix_hashes(substrate)
+                if hashes is None:
+                    # Connection was lost
+                    substrate = None
+                else:
+                    # Check for binary updates
+                    if hashes.get(management_directory, "") != current_hashes.get(management_directory, ""):
+                        file_hash = hashes.get(management_directory, "")
+                        # Stop the process
+                        terminate_process(process)
+                        # Get local destination path
+                        install_path = valid_paths[Targets.BINARY]
+                        # Get remote source path
+                        remote_path = "{}/{}".format(management_directory, file_hash)
+                        # Download file to temporary location
+                        tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                        download(remote_path, tmp_path,
+                                 s3_management_bucket_name, s3_bucket_region,
+                                 s3_access_key_id, s3_access_key_secret)
+                        # Perform the update
+                        was_successful = update(Targets.BINARY, tmp_path, install_path, file_hash)
+                        if was_successful:
+                            current_hashes[management_directory] = file_hash
+                        # Restart the process
+                        process = start_binary(valid_paths[Targets.BINARY], log_path,
+                                               ["--config", config_file])
+
+                    if management_directory == "server":
+                        # Check for GPU bin updates
+                        if hashes.get(Targets.GPUBIN, "") != current_hashes.get(Targets.GPUBIN, ""):
+                            file_hash = hashes.get(Targets.GPUBIN, "")
+                            # Get local destination path
+                            install_path = valid_paths[Targets.GPUBIN]
+                            # Get remote source path
+                            remote_path = "{}/{}".format(management_directory, file_hash)
+                            # Download file to temporary location
+                            tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                            download(remote_path, tmp_path,
+                                     s3_management_bucket_name, s3_bucket_region,
+                                     s3_access_key_id, s3_access_key_secret)
+                            # Perform the update
+                            was_successful = update(Targets.GPUBIN, tmp_path, install_path, file_hash)
+                            if was_successful:
+                                current_hashes[Targets.GPUBIN] = file_hash
+
+                        # Check for GPU lib updates
+                        if hashes.get(Targets.GPULIB, "") != current_hashes.get(Targets.GPULIB, ""):
+                            file_hash = hashes.get(Targets.GPULIB, "")
+                            # Get local destination path
+                            install_path = valid_paths[Targets.GPULIB]
+                            # Get remote source path
+                            remote_path = "{}/{}".format(management_directory, file_hash)
+                            # Download file to temporary location
+                            tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                            download(remote_path, tmp_path,
+                                     s3_management_bucket_name, s3_bucket_region,
+                                     s3_access_key_id, s3_access_key_secret)
+                            # Perform the update
+                            was_successful = update(Targets.GPULIB, tmp_path, install_path, file_hash)
+                            if was_successful:
+                                current_hashes[Targets.GPULIB] = file_hash
+
+                    # Check for wrapper updates
+                    if hashes.get(Targets.WRAPPER, "") != current_hashes.get(Targets.WRAPPER, ""):
+                        file_hash = hashes.get(Targets.WRAPPER, "")
+                        # Get local destination path
+                        install_path = valid_paths[Targets.WRAPPER]
+                        # Get remote source path
+                        remote_path = "{}/{}".format(management_directory, file_hash)
+                        # Download file to temporary location
+                        tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                        download(remote_path, tmp_path,
+                                 s3_management_bucket_name, s3_bucket_region,
+                                 s3_access_key_id, s3_access_key_secret)
+                        # Perform the update
+                        was_successful = update(Targets.WRAPPER, tmp_path, install_path, file_hash)
+                        if was_successful:
+                            current_hashes[Targets.WRAPPER] = file_hash
 
         # If there is a (recently modified) recovered error file present, restart the main process
         if err_output_path \
@@ -898,49 +1022,18 @@ def main():
                         # Get local destination path
                         install_path = valid_paths[target]
                         # Get remote source path
-                        update_path = "{}/{}".format(management_directory, info.get("path", ""))
-                        log.info("Downloading file at {} to {}...".format(update_path, install_path))
-
-                        # Make directories and download file to temporary location
-                        os.makedirs(os.path.dirname(install_path), exist_ok=True)
-                        tmp_path = install_path + ".tmp"
-                        download(update_path, tmp_path,
+                        remote_path = "{}/{}".format(management_directory, info.get("path", ""))
+                        # Download file to temporary location
+                        tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                        download(remote_path, tmp_path,
                                  s3_management_bucket_name, s3_bucket_region,
                                  s3_access_key_id, s3_access_key_secret)
 
-                        # Ensure the hash of the downloaded file matches the hash in the command
-                        update_bytes = bytes(open(tmp_path, 'rb').read())
-                        actual_hash = hashlib.sha256(update_bytes).hexdigest()
-                        expected_hash = info.get("sha256sum", "")
-                        if actual_hash != expected_hash:
-                            os.remove(path=tmp_path)
-                            log.error("Downloaded file {} does not match provided hash. Expected {}, got {}".format(
-                                tmp_path, expected_hash, actual_hash))
+                        # Perform the update
+                        was_successful = update(target, tmp_path, install_path, info.get("sha256sum", ""))
+                        if not was_successful:
                             timestamps[i] = timestamp
                             continue
-
-                        # Move the downloaded file into place, overwriting anything that's there
-                        try:
-                            os.replace(tmp_path, install_path)
-                        except Exception as err:
-                            log.error("Could not overwrite {} with {}: {}".format(
-                                install_path, tmp_path, err))
-                            timestamps[i] = timestamp
-                            continue
-
-                        # Handle binary updates
-                        if target == Targets.BINARY:
-                            os.chmod(install_path, stat.S_IEXEC)
-
-                        # Handle GPU library updates
-                        if target == Targets.GPULIB or target == Targets.GPUBIN:
-                            os.chmod(install_path, stat.S_IREAD)
-
-                        # Handle wrapper updates
-                        if target == Targets.WRAPPER:
-                            os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
-                            log.info("Wrapper script updated, exiting now...")
-                            os._exit(0)
 
                     log.info("Completed command: {}".format(command))
 
