@@ -7,7 +7,8 @@
 # // LICENSE file                                                              //
 # ///////////////////////////////////////////////////////////////////////////////
 
-# This script wraps the cMix binaries to provide system management
+# This script wraps xx network binaries to provide system management
+# via command files, binary updates via blockchain, as well as network logging
 
 import argparse
 import base64
@@ -23,13 +24,74 @@ import uuid
 import boto3
 from botocore.config import Config
 import botocore.exceptions
-import tarfile
 import shutil
 from OpenSSL import crypto
+from substrateinterface import SubstrateInterface
 import hashlib
 
 
-# FUNCTIONS --------------------------------------------------------------------
+########################################################################################################################
+# Blockchain Updates
+########################################################################################################################
+
+# Static variable detailing the Blockchain interface
+json_data="{\"runtime_id\": 1, \"types\": \"cmix_hashes::CmixSoftwareHashes\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
+
+
+def get_substrate_provider(consensus_url):
+    """
+    Get Substrate Provider to Listening on websocket of the Substrate Node configured with network registry json file
+    :param consensus_url: listening address:port of the substrate server
+    :return: Substrate Network Provider used to query blockchain
+    """
+    try:
+        return SubstrateInterface(
+            url=consensus_url,
+            type_registry_preset='substrate-node-template',
+            type_registry=json.loads(json_data)
+        )
+    except ConnectionRefusedError:
+        log.error("No local Substrate node running.")
+        return None
+    except Exception as e:
+        log.error("Failed to get substrate chain connection: %s" % e)
+        return None
+
+
+def poll_cmix_hashes(consensus_url):
+    """
+    Polling Substrate Chain information to feed cmix with the current cmix hashes
+    :param consensus_url: listening address:port of the substrate server
+    :return: dictionary with cmix hashes
+    """
+    polling_freq = 10  # in seconds
+    # Initialize substrate connection
+    substrate = get_substrate_provider(consensus_url)
+
+    # Begin query loop
+    while True:
+        # Handle lost connections
+        while substrate is None:
+            time.sleep(polling_freq)
+            substrate = get_substrate_provider(consensus_url)
+
+        # Send a poll to the blockchain every polling_freq seconds
+        time.sleep(polling_freq)
+        try:
+            cmix_hashes = substrate.query(
+                module='XXNetwork',
+                storage_function='CmixHashes',
+                params=[]
+            )
+            return cmix_hashes
+        except Exception as e:
+            log.error("Connection lost while in \'substrate.query(\"XXNetwork\", \"CmixHashes\")\'. Error: %s" % e)
+            substrate = None
+
+
+########################################################################################################################
+# Logging
+########################################################################################################################
 
 
 def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret):
@@ -205,7 +267,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
     :param log_events: current array of events
     :return:
     """
-    # using these to deliniate the start of an event
+    # using these to delineate the start of an event
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL", "TRACE"]
 
     # This controls how long we should wait after a line before assuming it's the end of an event
@@ -291,6 +353,11 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
     finally:
         # Always return upload sequence token - dropping this causes lots of errors
         return upload_sequence_token, ok
+
+
+########################################################################################################################
+# Command Functions
+########################################################################################################################
 
 
 def check_networking():
@@ -500,6 +567,10 @@ def save_cmd(file_path, dest_dir, valid, cmd_time):
     shutil.copyfile(file_path, dest)
 
 
+########################################################################################################################
+# Control Flow
+########################################################################################################################
+
 def get_args():
     """
     get_args handles argument parsing for the script
@@ -525,9 +596,6 @@ def get_args():
                         default="us-west-1")
 
     # Wrapper arguments
-    parser.add_argument("--disable-consensus", action="store_true", required=False,
-                        help="Disable Consensus integration (For test environments only)",
-                        default=False)
     parser.add_argument("--disable-cloudwatch", action="store_true", required=False,
                         help="Disable uploading log events to CloudWatch",
                         default=False)
@@ -569,9 +637,9 @@ def get_args():
                         default="xxnetwork-logs-prod")
 
     # Consensus arguments
-    parser.add_argument("--consensus-binary", type=str, required=False,
-                        help="Path of the Consensus binary",
-                        default="/opt/xxnetwork/bin/xxnetwork-consensus")
+    parser.add_argument("--disable-consensus", action="store_true", required=False,
+                        help="Disable Consensus integration (For test environments only)",
+                        default=False)
     parser.add_argument("--consensus-log", type=str, required=False,
                         help="Path of the Consensus log file",
                         default="/opt/xxnetwork/logs/consensus.log")
@@ -634,10 +702,9 @@ def main():
     os.makedirs(tmp_dir, exist_ok=True)
     cmd_log_dir = args["cmd_dir"]
     log_grp = args["cloudwatch_log_group"]
-    consensus_binary = args["consensus_binary"]
     consensus_log = args["consensus_log"]
     consensus_grp = args["consensus_cw_group"]
-    consensus_config = args["consensus_config"]
+    consensus_url = args["consensus_url"]
     config_file = args["config_path"]
     disable_consensus = args["disable_consensus"]
     disable_cloudwatch = args["disable_cloudwatch"]
