@@ -510,18 +510,19 @@ def get_args():
     # Management arguments
     parser.add_argument("--s3-path", type=str, required=True,
                         help="S3 management directory")
+    parser.add_argument("--s3-access-key", type=str, required=True,
+                        help="S3 access key")
+    parser.add_argument("--s3-secret", type=str, required=True,
+                        help="S3 access key secret")
     parser.add_argument("--s3-management-bucket", type=str, required=False,
                         help="S3 management bucket name",
                         default="alphanet-management-prod")
     parser.add_argument("--s3-bin-bucket", type=str, required=False,
                         help="S3 binary bucket name",
                         default="elixxir-bins")
-    parser.add_argument("--s3-access-key", type=str, required=True,
-                        help="S3 access key")
-    parser.add_argument("--s3-secret", type=str, required=True,
-                        help="S3 access key secret")
-    parser.add_argument("--s3-region", type=str, required=True,
-                        help="S3 region")
+    parser.add_argument("--s3-region", type=str, required=False,
+                        help="S3 region",
+                        default="us-west-1")
 
     # Wrapper arguments
     parser.add_argument("--disable-consensus", action="store_true", required=False,
