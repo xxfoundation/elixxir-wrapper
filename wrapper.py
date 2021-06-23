@@ -510,10 +510,12 @@ def get_args():
     # Management arguments
     parser.add_argument("--s3-path", type=str, required=True,
                         help="S3 management directory")
-    parser.add_argument("--s3-management-bucket", type=str, required=True,
-                        help="S3 management bucket name")
-    parser.add_argument("--s3-bin-bucket", type=str, required=True,
-                        help="S3 binary bucket name")
+    parser.add_argument("--s3-management-bucket", type=str, required=False,
+                        help="S3 management bucket name",
+                        default="alphanet-management-prod")
+    parser.add_argument("--s3-bin-bucket", type=str, required=False,
+                        help="S3 binary bucket name",
+                        default="elixxir-bins")
     parser.add_argument("--s3-access-key", type=str, required=True,
                         help="S3 access key")
     parser.add_argument("--s3-secret", type=str, required=True,
@@ -811,6 +813,12 @@ def main():
 
                     # UPDATE COMMAND ===========================
                     elif command_type == "update":
+
+                        # Skip updates of this kind when consensus is enabled
+                        if not disable_consensus:
+                            log.error("Update command ignored, consensus enabled!")
+                            timestamps[i] = timestamp
+                            continue
 
                         # Verify valid install path
                         if target not in valid_paths.keys():
