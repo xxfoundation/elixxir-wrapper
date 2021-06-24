@@ -732,7 +732,7 @@ def main():
     log_path = args["log_path"]
     wrapper_log_path = args["wrapper_log"]
     err_output_path = args["err_path"]
-    id_path = args["idpath"]
+    id_path = args["id_path"]
     version_file = management_directory + "/version.jsonl"
     command_file = management_directory + "/command.jsonl"
     tmp_dir = args["tmp_dir"]
