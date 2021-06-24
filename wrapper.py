@@ -685,6 +685,7 @@ def get_args():
                         default="ws://localhost:30334")
 
     args, unknown = parser.parse_known_args()
+    args = vars(args)
 
     # Configure logger
     log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
@@ -694,7 +695,7 @@ def get_args():
     # Handle unknown args
     if len(unknown) > 0:
         log.warning("Unknown arguments: {}".format(unknown))
-    return vars(args)
+    return args
 
 
 # TARGET CLASS -----------------------------------------------------------------
