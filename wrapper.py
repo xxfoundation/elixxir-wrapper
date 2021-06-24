@@ -635,7 +635,7 @@ def get_args():
                         default=False)
     parser.add_argument("--management-cert", type=str, required=False,
                         help="Path of the management certificate file",
-                        default="/opts/xxnetwork/creds/network_management.crt")
+                        default="/opt/xxnetwork/creds/network_management.crt")
     parser.add_argument("--tmp-dir", type=str, required=False,
                         help="Directory for placing temporary files",
                         default="/tmp")
