@@ -648,12 +648,12 @@ def get_args():
 
     # Elixxir arguments
     parser.add_argument("--binary-path", type=str, required=True,
-                        help="Path of the Elixxir binary")
+                        help="Path of the Node/Gateway binary")
     parser.add_argument("--config-path", type=str, required=True,
-                        help="Path of the Elixxir config file")
+                        help="Path of the Node/Gateway config file")
     parser.add_argument("--log-path", type=str, required=False,
                         default="/opt/xxnetwork/logs/xx.log",
-                        help="Path of the Elixxir log file")
+                        help="Path of the Node/Gateway log file")
     parser.add_argument("--gpu-lib", type=str, required=False,
                         default="/opt/xxnetwork/lib/libpowmosm75.so",
                         help="Path of the GPU exponentiation library")
@@ -662,9 +662,9 @@ def get_args():
                         help="Path of the GPU bin file")
     parser.add_argument("--id-path", type=str, required=False,
                         default="/opt/xxnetwork/creds/IDF.json",
-                        help="Path of the Elixxir ID file")
+                        help="Path of the Node/Gateway ID file")
     parser.add_argument("--err-path", type=str, required=False,
-                        help="Path of the Elixxir error recovery file",
+                        help="Path of the Node error recovery file",
                         default="/opt/xxnetwork/logs/node-err.log")
     parser.add_argument("--cloudwatch-log-group", type=str, required=False,
                         help="Log group for CloudWatch logging",
