@@ -613,8 +613,6 @@ def get_args():
     parser = argparse.ArgumentParser()
 
     # Management arguments
-    parser.add_argument("--s3-path", type=str, required=True,
-                        help="S3 management directory")
     parser.add_argument("--s3-access-key", type=str, required=True,
                         help="S3 access key")
     parser.add_argument("--s3-secret", type=str, required=True,
@@ -630,6 +628,8 @@ def get_args():
                         default="us-west-1")
 
     # Wrapper arguments
+    parser.add_argument("--gateway", action="store_true", required=False,
+                        help="Enable gateway mode")
     parser.add_argument("--disable-cloudwatch", action="store_true", required=False,
                         help="Disable uploading log events to CloudWatch",
                         default=False)
@@ -661,11 +661,11 @@ def get_args():
                         default="/opt/xxnetwork/lib/libpow.fatbin",
                         help="Path of the GPU bin file")
     parser.add_argument("--id-path", type=str, required=False,
-                        default="/opt/xxnetwork/logs/IDF.json",
+                        default="/opt/xxnetwork/creds/IDF.json",
                         help="Path of the Elixxir ID file")
     parser.add_argument("--err-path", type=str, required=False,
                         help="Path of the Elixxir error recovery file",
-                        default="/opt/xxnetwork/node-logs/node-err.log")
+                        default="/opt/xxnetwork/logs/node-err.log")
     parser.add_argument("--cloudwatch-log-group", type=str, required=False,
                         help="Log group for CloudWatch logging",
                         default="xxnetwork-logs-prod")
@@ -720,9 +720,11 @@ def main():
     binary_path = args["binary_path"]
     gpulib_path = args["gpu_lib"]
     gpubin_path = args["gpu_bin"]
-    management_directory = args["s3_path"]
+    is_gateway = args["gateway"]
+    management_directory = "gateway" if is_gateway else "server"
     rsa_certificate_path = args["management_cert"]
     s3_management_bucket_name = args["s3_bucket"]
+    s3_bin_bucket_name = args["s3_bin_bucket"]
     s3_access_key_id = args["s3_access_key"]
     s3_access_key_secret = args["s3_secret"]
     s3_bucket_region = args["s3_region"]
@@ -772,6 +774,10 @@ def main():
     # Keep track of current binary hashes for blockchain updates
     current_hashes = dict()
 
+    # Obtain the current wrapper hash in order to prevent update loop
+    wrapper_bytes = bytes(open(valid_paths[Targets.WRAPPER], 'rb').read())
+    current_hashes[Targets.WRAPPER] = hashlib.sha256(wrapper_bytes).hexdigest()
+
     # CONTROL FLOW -----------------------------------------------------------------
 
     # Start the log backup service
@@ -782,7 +788,7 @@ def main():
         wrapper_logging_process = start_cw_logger(log_grp, wrapper_log_path,
                                                   id_path, s3_bucket_region,
                                                   s3_access_key_id, s3_access_key_secret)
-        if not disable_consensus and management_directory == "server":
+        if not disable_consensus and not is_gateway:
             consensus_logging_process = start_cw_logger(consensus_grp, consensus_log,
                                                         id_path, s3_bucket_region,
                                                         s3_access_key_id, s3_access_key_secret)
@@ -795,7 +801,7 @@ def main():
     while True:
         time.sleep(command_frequency)
 
-        # Handle updates from blockchain
+        # Handle updates from blockchain, if enabled
         if not disable_consensus:
             if substrate is None:
                 # Handle lost connections
@@ -807,29 +813,24 @@ def main():
                     # Connection was lost
                     substrate = None
                 else:
-                    # Check for binary updates
-                    if hashes.get(management_directory, "") != current_hashes.get(management_directory, ""):
-                        file_hash = hashes.get(management_directory, "")
-                        # Stop the process
-                        terminate_process(process)
+                    # Check for wrapper updates
+                    if hashes.get(Targets.WRAPPER, "") != current_hashes.get(Targets.WRAPPER, ""):
+                        file_hash = hashes.get(Targets.WRAPPER, "")
                         # Get local destination path
-                        install_path = valid_paths[Targets.BINARY]
+                        install_path = valid_paths[Targets.WRAPPER]
                         # Get remote source path
                         remote_path = "{}/{}".format(management_directory, file_hash)
                         # Download file to temporary location
                         tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                         download(remote_path, tmp_path,
-                                 s3_management_bucket_name, s3_bucket_region,
+                                 s3_bin_bucket_name, s3_bucket_region,
                                  s3_access_key_id, s3_access_key_secret)
                         # Perform the update
-                        was_successful = update(Targets.BINARY, tmp_path, install_path, file_hash)
+                        was_successful = update(Targets.WRAPPER, tmp_path, install_path, file_hash)
                         if was_successful:
-                            current_hashes[management_directory] = file_hash
-                        # Restart the process
-                        process = start_binary(valid_paths[Targets.BINARY], log_path,
-                                               ["--config", config_file])
+                            current_hashes[Targets.WRAPPER] = file_hash
 
-                    if management_directory == "server":
+                    if not is_gateway:
                         # Check for GPU bin updates
                         if hashes.get(Targets.GPUBIN, "") != current_hashes.get(Targets.GPUBIN, ""):
                             file_hash = hashes.get(Targets.GPUBIN, "")
@@ -840,7 +841,7 @@ def main():
                             # Download file to temporary location
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
-                                     s3_management_bucket_name, s3_bucket_region,
+                                     s3_bin_bucket_name, s3_bucket_region,
                                      s3_access_key_id, s3_access_key_secret)
                             # Perform the update
                             was_successful = update(Targets.GPUBIN, tmp_path, install_path, file_hash)
@@ -857,29 +858,34 @@ def main():
                             # Download file to temporary location
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
-                                     s3_management_bucket_name, s3_bucket_region,
+                                     s3_bin_bucket_name, s3_bucket_region,
                                      s3_access_key_id, s3_access_key_secret)
                             # Perform the update
                             was_successful = update(Targets.GPULIB, tmp_path, install_path, file_hash)
                             if was_successful:
                                 current_hashes[Targets.GPULIB] = file_hash
 
-                    # Check for wrapper updates
-                    if hashes.get(Targets.WRAPPER, "") != current_hashes.get(Targets.WRAPPER, ""):
-                        file_hash = hashes.get(Targets.WRAPPER, "")
+                    # Check for binary updates
+                    if hashes.get(management_directory, "") != current_hashes.get(management_directory, ""):
+                        file_hash = hashes.get(management_directory, "")
+                        # Stop the process
+                        terminate_process(process)
                         # Get local destination path
-                        install_path = valid_paths[Targets.WRAPPER]
+                        install_path = valid_paths[Targets.BINARY]
                         # Get remote source path
                         remote_path = "{}/{}".format(management_directory, file_hash)
                         # Download file to temporary location
                         tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                         download(remote_path, tmp_path,
-                                 s3_management_bucket_name, s3_bucket_region,
+                                 s3_bin_bucket_name, s3_bucket_region,
                                  s3_access_key_id, s3_access_key_secret)
                         # Perform the update
-                        was_successful = update(Targets.WRAPPER, tmp_path, install_path, file_hash)
+                        was_successful = update(Targets.BINARY, tmp_path, install_path, file_hash)
                         if was_successful:
-                            current_hashes[Targets.WRAPPER] = file_hash
+                            current_hashes[management_directory] = file_hash
+                            # Restart the process
+                            process = start_binary(valid_paths[Targets.BINARY], log_path,
+                                                   ["--config", config_file])
 
         # If there is a (recently modified) recovered error file present, restart the main process
         if err_output_path \
@@ -979,7 +985,7 @@ def main():
                                 wrapper_logging_process = start_cw_logger(log_grp, wrapper_log_path,
                                                                           id_path, s3_bucket_region,
                                                                           s3_access_key_id, s3_access_key_secret)
-                            if not disable_consensus and management_directory == "server" \
+                            if not disable_consensus and not is_gateway \
                                     and (consensus_logging_process is None or not consensus_logging_process.is_alive()):
                                 consensus_logging_process = start_cw_logger(consensus_grp, consensus_log,
                                                                             id_path, s3_bucket_region,
