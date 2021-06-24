@@ -724,7 +724,7 @@ def main():
     is_gateway = args["gateway"]
     management_directory = "gateway" if is_gateway else "server"
     rsa_certificate_path = args["management_cert"]
-    s3_management_bucket_name = args["s3_bucket"]
+    s3_management_bucket_name = args["s3_management_bucket"]
     s3_bin_bucket_name = args["s3_bin_bucket"]
     s3_access_key_id = args["s3_access_key"]
     s3_access_key_secret = args["s3_secret"]
