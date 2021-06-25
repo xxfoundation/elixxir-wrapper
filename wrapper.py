@@ -396,7 +396,6 @@ def download(src_path, dst_path, s3_bucket, region,
     :rtype: None
     """
     try:
-        log.info("Downloading file at {} to {}...".format(src_path, dst_path))
         s3 = boto3.Session(
             aws_access_key_id=access_key_id,
             aws_secret_access_key=access_key_secret,
