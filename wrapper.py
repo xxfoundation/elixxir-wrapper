@@ -703,8 +703,8 @@ def get_args():
 
 class Targets:
     BINARY = 'binary'
-    GPULIB = 'gpulib'
-    GPUBIN = 'gpubin'
+    GPULIB = 'libpow'
+    GPUBIN = 'fatbin'
     WRAPPER = 'wrapper'
     CERT = 'cert'
     LOGGER = 'logger'
