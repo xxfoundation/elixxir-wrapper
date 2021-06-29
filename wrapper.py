@@ -20,7 +20,6 @@ import subprocess
 import sys
 import multiprocessing
 import time
-import uuid
 import boto3
 from botocore.config import Config
 import botocore.exceptions
@@ -41,6 +40,7 @@ json_data="{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"stru
 def get_substrate_provider(consensus_url):
     """
     Get Substrate Provider to Listening on websocket of the Substrate Node configured with network registry json file
+
     :param consensus_url: listening address:port of the substrate server
     :return: Substrate Network Provider used to query blockchain
     """
@@ -58,12 +58,32 @@ def get_substrate_provider(consensus_url):
         return None
 
 
+def check_sync(substrate):
+    """
+    Polls Substrate Chain to determine whether the Node is synced
+
+    :param substrate: The active substrate connection
+    :return: True if Node is synced, else False
+    """
+    try:
+        result = substrate.rpc_request('system_syncState', []).get('result')
+        return result["currentBlock"] == result["highestBlock"]
+    except Exception as e:
+        log.error("Failed to query sync state: %s" % e)
+    return False
+
+
 def poll_cmix_hashes(substrate):
     """
-    Polling Substrate Chain information to feed cmix with the current cmix hashes
+    Polls Substrate Chain information to feed cmix with the current cmix hashes
+
     :param substrate: The active substrate connection
-    :return: dictionary with cmix hashes
+    :return: dictionary with cmix hashes, empty dict if not synced, or None if an Exception occurred
     """
+    # Check if node is fully synced
+    if check_sync(substrate) is False:
+        return dict()
+
     try:
         cmix_hashes = substrate.query(
             module='XXNetwork',
@@ -74,6 +94,63 @@ def poll_cmix_hashes(substrate):
     except Exception as e:
         log.error("Connection lost while in \'substrate.query(\"XXNetwork\", \"CmixHashes\")\'. Error: %s" % e)
         return None
+
+
+def poll_ready(substrate):
+    """
+    Polls Substrate Chain information to feed cmix with the node's state
+
+    :param substrate: The active substrate connection
+    :return: True if node is ready, else false
+    """
+    try:
+        validator_set = substrate.query("Session", "Validators")
+    except Exception as e:
+        log.error("Connection lost while in \'substrate.query(\"Session\", \"Validators\")\'. Error: %s" % e)
+        return
+
+    try:
+        disabled_set = substrate.query("Session", "DisabledValidators")
+    except Exception as e:
+        log.error("Connection lost while in \'substrate.query(\"Session\", \"DisabledValidators\")\'. Error: %s" % e)
+        return
+
+    for val in disabled_set.value:
+        validator_set.value.pop(val)
+
+    try:
+        active_era = substrate.query(
+            module='Staking',
+            storage_function='ActiveEra',
+            params=[]
+        )
+    except Exception as e:
+        log.error("Connection lost while in \'substrate.query(\"Staking\", \"ActiveEra\")\'. Error: %s" % e)
+        return
+
+    era = active_era.value['index']
+    log.debug(f"Era = {era}")
+
+    found = False
+    for val in validator_set.value:
+        try:
+            data = substrate.query(
+                module='Staking',
+                storage_function='ErasValidatorPrefs',
+                params=[era, val]
+            )
+        except Exception as e:
+            log.error(f"Connection lost while in \'substrate.query(\"Staking\", \"ErasValidatorPrefs\", [{era}, {val}])\'. Error: %s" % e)
+            return
+
+        cmix_root = data.value['cmix_root']
+        if cmix_root == cmix_id:
+            log.debug("Node found in active validator set: " + val)
+            found = True
+            break
+        if found is False:
+            log.debug("Node not in validator set for current era, waiting...")
+    return found
 
 
 ########################################################################################################################
@@ -96,9 +173,6 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
     :return The newly created logging process
     :rtype multiprocessing.Process
     """
-    # If there is already a log file, open it here so we don't lose records
-    log_file = None
-
     # Configure boto retries
     config = Config(
         retries=dict(
@@ -113,6 +187,7 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
                           config=config)
 
     # Open the log file read-only and pin its current size if it already exists
+    log_file = None
     if os.path.isfile(log_file_path):
         log_file = open(log_file_path, 'r')
         log_file.seek(0, os.SEEK_END)
@@ -138,7 +213,6 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     :param log_file_path: Path to the log file
     :param id_path: path to node's id file
     """
-    global read_node_id
     # Constants
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
@@ -199,28 +273,24 @@ def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     :param log_file: log file to read lines from
     :return log_file, client, log_stream_name, upload_sequence_token:
     """
-    global read_node_id
     upload_sequence_token = ""
 
-    # If the log file does not already exist, wait for it
+    # Wait for the IDF in order to use ID as log prefix
+    log.info("Waiting for IDF...")
+    while read_cmix_id(id_path) is None:
+        time.sleep(10)
+    log_prefix = read_cmix_id(id_path)
+
+    log_name = os.path.basename(log_file_path)  # Name of the log file
+    log_stream_name = "{}-{}".format(log_prefix, log_name)  # Stream name should be {ID}-{node/gateway/wrapper}.log
+
+    # Wait for the log file to exist, then open it
     if not log_file:
+        log.info("Waiting for {}...".format(log_file_path))
         while not os.path.isfile(log_file_path):
             time.sleep(1)
         # Open the newly-created log file as read-only
         log_file = open(log_file_path, 'r')
-
-    # Define prefix for log stream - should be ID based on file
-    if read_node_id:
-        log_prefix = read_node_id
-    # Read node ID from the file
-    else:
-        log.info("Waiting for ID file...")
-        while not os.path.exists(id_path):
-            time.sleep(1)
-        log_prefix = get_node_id(id_path)
-
-    log_name = os.path.basename(log_file_path)  # Name of the log file
-    log_stream_name = "{}-{}".format(log_prefix, log_name)  # Stream name should be {ID}-{node/gateway}.log
 
     try:
         # Determine if stream exists.  If not, make one.
@@ -510,41 +580,34 @@ def terminate_multiprocess(p):
                  format(pid, p.exitcode))
 
 
-# generated_uuid is a static cached UUID used as the node_id
-generated_uuid = None
-# read_node_id is a static cached node id when we successfully read it
-read_node_id = None
+# cmix_id is a static cached cmix id when we successfully read it from the IDF
+cmix_id = None
 
 
-def get_node_id(id_path):
+def read_cmix_id(id_path):
     """
-    Obtain the ID of the running node.
+    Obtain the ID of the running node/gateway.
 
-    :param id_path: the path to the node id
+    :param id_path: the path to the IDF
     :type id_path: str
-    :return: The node id OR a UUID by host and time if node id file absent
+    :return: The ID from the IDF
     :rtype: str
     """
-    global generated_uuid, read_node_id
+    global cmix_id
     # if we've already read it successfully from the file, return it
-    if read_node_id:
-        return read_node_id
+    if cmix_id:
+        return cmix_id
     # Read it from the file
     try:
         if os.path.exists(id_path):
             with open(id_path, 'r') as id_file:
                 new_node_id = json.loads(id_file.read().strip()).get("id", None)
                 if new_node_id:
-                    read_node_id = new_node_id
+                    cmix_id = new_node_id
                     return new_node_id
     except Exception as error:
-        log.warning("Could not open node ID at {}: {}".format(id_path, error))
-
-    # If that fails, then generate, or use the last generated UUID
-    if not generated_uuid:
-        generated_uuid = str(uuid.uuid1())
-        log.warning("Generating random instance ID: {}".format(generated_uuid))
-    return generated_uuid
+        log.warning("Could not open IDF at {}: {}".format(id_path, error))
+        return None
 
 
 def verify_cmd(in_buf, public_key_path):
@@ -760,6 +823,8 @@ def main():
     timestamps = [0, time.time()]
     # Record the most recent error timestamp to avoid restart loops
     last_error_timestamp = 0
+    # Frequency (in seconds) of checking for new commands
+    command_frequency = 10
 
     # Globally keep track of the main process being wrapped
     process = None
@@ -774,13 +839,31 @@ def main():
     # Keep track of current binary hashes for blockchain updates
     current_hashes = dict()
 
-    # Obtain the current wrapper hash in order to prevent update loop
-    wrapper_bytes = bytes(open(valid_paths[Targets.WRAPPER], 'rb').read())
-    current_hashes[Targets.WRAPPER] = hashlib.sha256(wrapper_bytes).hexdigest()
+    # Consensus-specific initialization code
+    if not disable_consensus:
+        # Obtain the current wrapper hash in order to prevent update loop
+        wrapper_bytes = bytes(open(valid_paths[Targets.WRAPPER], 'rb').read())
+        current_hashes[Targets.WRAPPER] = hashlib.sha256(wrapper_bytes).hexdigest()
+
+        # Wait for the cmix ID file to exist before entering the main loop
+        log.info("Waiting on IDF for consensus...")
+        while read_cmix_id(id_path) is None:
+            time.sleep(command_frequency)
+
+        # Wait for the node to stake before entering the main loop
+        log.info("Waiting on consensus...")
+        substrate = get_substrate_provider(consensus_url)
+        while True:
+            while substrate is None:
+                time.sleep(command_frequency)
+                substrate = get_substrate_provider(consensus_url)
+            if poll_ready(substrate):
+                break
+            time.sleep(command_frequency)
 
     # CONTROL FLOW -----------------------------------------------------------------
 
-    # Start the log backup service
+    # Start the various log backup threads
     if not disable_cloudwatch:
         logging_process = start_cw_logger(log_grp, log_path,
                                           id_path, s3_bucket_region,
@@ -793,10 +876,8 @@ def main():
                                                         id_path, s3_bucket_region,
                                                         s3_access_key_id, s3_access_key_secret)
 
-    # Frequency (in seconds) of checking for new commands
-    command_frequency = 10
-    log.info("Script initialized at {}".format(time.time()))
     # Main command/control loop
+    log.info("Script initialized at {}".format(time.time()))
     remotes_paths = [version_file, command_file]
     while True:
         time.sleep(command_frequency)
@@ -946,15 +1027,14 @@ def main():
                               "ignoring...".format(timestamp))
                     continue
 
-                # Note: We get the UUID for every valid command in case it changes
-                node_id = get_node_id(id_path)
-
                 # Execute the commands in sequence
                 for command in signed_commands.get("commands", list()):
 
                     # If the command does not apply to us, note that and move on
                     if "nodes" in command:
                         node_targets = command.get("nodes", list())
+                        # Note: We get the ID for every valid command in case it changes
+                        node_id = read_cmix_id(id_path)
                         if node_targets and node_id not in node_targets:
                             log.info("Command does not apply to {}".format(node_id))
                             timestamps[i] = timestamp
