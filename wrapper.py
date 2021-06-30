@@ -491,7 +491,7 @@ def update(target, tmp_path, install_path, expected_hash):
     """
     # Ensure the hash of the downloaded file matches the hash in the command
     update_bytes = bytes(open(tmp_path, 'rb').read())
-    actual_hash = hashlib.sha256(update_bytes).hexdigest()
+    actual_hash = hashlib.blake2s(update_bytes).hexdigest()
     if actual_hash != expected_hash:
         os.remove(path=tmp_path)
         log.error("Downloaded file {} does not match provided hash. Expected {}, got {}".format(
@@ -843,7 +843,7 @@ def main():
     if not disable_consensus:
         # Obtain the current wrapper hash in order to prevent update loop
         wrapper_bytes = bytes(open(valid_paths[Targets.WRAPPER], 'rb').read())
-        current_hashes[Targets.WRAPPER] = hashlib.sha256(wrapper_bytes).hexdigest()
+        current_hashes[Targets.WRAPPER] = hashlib.blake2s(wrapper_bytes).hexdigest()
 
         # Wait for the cmix ID file to exist before entering the main loop
         log.info("Waiting on IDF for consensus...")
@@ -1120,7 +1120,7 @@ def main():
                                  s3_access_key_id, s3_access_key_secret)
 
                         # Perform the update
-                        was_successful = update(target, tmp_path, install_path, info.get("sha256sum", ""))
+                        was_successful = update(target, tmp_path, install_path, info.get("hash", ""))
                         if not was_successful:
                             timestamps[i] = timestamp
                             continue
