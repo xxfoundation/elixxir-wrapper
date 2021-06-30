@@ -845,21 +845,23 @@ def main():
         wrapper_bytes = bytes(open(valid_paths[Targets.WRAPPER], 'rb').read())
         current_hashes[Targets.WRAPPER] = hashlib.blake2s(wrapper_bytes).hexdigest()
 
-        # Wait for the cmix ID file to exist before entering the main loop
-        log.info("Waiting on IDF for consensus...")
-        while read_cmix_id(id_path) is None:
-            time.sleep(command_frequency)
-
-        # Wait for the node to stake before entering the main loop
-        log.info("Waiting on consensus...")
-        substrate = get_substrate_provider(consensus_url)
-        while True:
-            while substrate is None:
+        # Node-specific consensus initialization code
+        if not is_gateway:
+            # Wait for the Node ID file to exist before entering the main loop
+            log.info("Waiting on IDF for consensus...")
+            while read_cmix_id(id_path) is None:
                 time.sleep(command_frequency)
-                substrate = get_substrate_provider(consensus_url)
-            if poll_ready(substrate):
-                break
-            time.sleep(command_frequency)
+
+            # Wait for the node to stake before entering the main loop
+            log.info("Waiting on consensus...")
+            substrate = get_substrate_provider(consensus_url)
+            while True:
+                while substrate is None:
+                    time.sleep(command_frequency)
+                    substrate = get_substrate_provider(consensus_url)
+                if poll_ready(substrate):
+                    break
+                time.sleep(command_frequency)
 
     # CONTROL FLOW -----------------------------------------------------------------
 
