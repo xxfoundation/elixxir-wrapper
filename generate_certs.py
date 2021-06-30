@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
 
-#///////////////////////////////////////////////////////////////////////////////
-#// Copyright © 2020 xx network SEZC                                          //
-#//                                                                           //
-#// Use of this source code is governed by a license that can be found in the //
-#// LICENSE file                                                              //
-#///////////////////////////////////////////////////////////////////////////////
+# ///////////////////////////////////////////////////////////////////////////////
+# // Copyright © 2020 xx network SEZC                                          //
+# //                                                                           //
+# // Use of this source code is governed by a license that can be found in the //
+# // LICENSE file                                                              //
+# ///////////////////////////////////////////////////////////////////////////////
 
 # This file is an interactive script to generate certificates for both gateway and node
 
 import os
 import subprocess
 
+node_key = "creds/node_key.key"
+node_cert = "creds/node_cert.crt"
+gw_key = "creds/gateway_key.key"
+gw_cert = "creds/gateway_cert.crt"
+node_idf = "creds/nodeIDF.json"
+gw_idf = "creds/gatewayIDF.json"
+
 
 def main():
+    if os.path.exists('creds'):
+        if os.path.exists(node_key) and os.path.exists(gw_key) \
+                and os.path.exists(node_cert) and os.path.exists(gw_cert) \
+                and os.path.exists(node_idf) and os.path.exists(gw_idf):
+            print("Generation has already completed")
+            return
     print("This script will ask you to input information to be used in key generation.")
     print("If you do not wish to enter any given field, a default will be provided, attributed to the xx network.")
     country = input("Country (default: 'KY (Cayman Islands)'): ")
@@ -57,15 +70,19 @@ subjectAltName=DNS:%s
     subj = "/C=%s/ST=%s/L=%s/O=%s/OU=%s/CN=%s/emailAddress=%s" % \
            (country, state, locality, organization, organizational_unit, domain, email)
 
-    node = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "730",
-            "-nodes", "-keyout", "creds/node_key.key", "-out", "creds/node_cert.crt",
+    node_gen_command = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "730",
+            "-nodes", "-keyout", node_key, "-out", node_cert,
             "-subj", subj, "-extensions", "san", "-config", "cert.conf"]
-    gate = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "730",
-            "-nodes", "-keyout", "creds/gateway_key.key", "-out", "creds/gateway_cert.crt",
+    gw_gen_command = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "730",
+            "-nodes", "-keyout", gw_key, "-out", gw_cert,
             "-subj", subj, "-extensions", "san", "-config", "cert.conf"]
-    subprocess.run(node)
+    subprocess.run(node_gen_command)
     print("~~~~~")
-    subprocess.run(gate)
+    subprocess.run(gw_gen_command)
+    node_idf_command = ["id-generation", "generate", "-p", node_cert, "-o", node_idf]
+    gw_idf_command = ["id-generation", "generate", "-p", gw_cert, "-o", gw_idf]
+    subprocess.run(node_idf_command)
+    subprocess.run(gw_idf_command)
     os.remove("cert.conf")
 
 
