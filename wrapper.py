@@ -906,7 +906,8 @@ def main():
                 else:
                     try:
                         # Check for wrapper updates
-                        if hashes.get(Targets.WRAPPER, "") != current_hashes.get(Targets.WRAPPER, ""):
+                        if hashes.get(Targets.WRAPPER, "") != current_hashes.get(
+                                Targets.WRAPPER, "0x0000000000000000000000000000000000000000000000000000000000000000"):
                             file_hash = hashes.get(Targets.WRAPPER, "")
                             # Get local destination path
                             install_path = valid_paths[Targets.WRAPPER]
@@ -924,7 +925,8 @@ def main():
 
                         if not is_gateway:
                             # Check for GPU bin updates
-                            if hashes.get(Targets.GPUBIN, "") != current_hashes.get(Targets.GPUBIN, ""):
+                            if hashes.get(Targets.GPUBIN, "") != current_hashes.get(
+                                    Targets.GPUBIN, "0x0000000000000000000000000000000000000000000000000000000000000000"):
                                 file_hash = hashes.get(Targets.GPUBIN, "")
                                 # Get local destination path
                                 install_path = valid_paths[Targets.GPUBIN]
@@ -941,7 +943,8 @@ def main():
                                     current_hashes[Targets.GPUBIN] = file_hash
 
                             # Check for GPU lib updates
-                            if hashes.get(Targets.GPULIB, "") != current_hashes.get(Targets.GPULIB, ""):
+                            if hashes.get(Targets.GPULIB, "") != current_hashes.get(
+                                    Targets.GPULIB, "0x0000000000000000000000000000000000000000000000000000000000000000"):
                                 file_hash = hashes.get(Targets.GPULIB, "")
                                 # Get local destination path
                                 install_path = valid_paths[Targets.GPULIB]
@@ -958,7 +961,8 @@ def main():
                                     current_hashes[Targets.GPULIB] = file_hash
 
                         # Check for binary updates
-                        if hashes.get(management_directory, "") != current_hashes.get(management_directory, ""):
+                        if hashes.get(management_directory, "") != current_hashes.get(
+                                management_directory, "0x0000000000000000000000000000000000000000000000000000000000000000"):
                             file_hash = hashes.get(management_directory, "")
                             # Stop the process
                             terminate_process(process)
