@@ -697,16 +697,16 @@ def get_args():
                         default=False)
     parser.add_argument("--management-cert", type=str, required=False,
                         help="Path of the management certificate file",
-                        default="/opt/xxnetwork/cmix/creds/network_management.crt")
+                        default="/opt/xxnetwork/creds/network_management.crt")
     parser.add_argument("--tmp-dir", type=str, required=False,
                         help="Directory for placing temporary files",
                         default="/tmp")
     parser.add_argument("--cmd-dir", type=str, required=False,
                         help="Directory used for saving command file history",
-                        default="/opt/xxnetwork/cmix/logs/cmdlog")
+                        default="/opt/xxnetwork/logs/cmdlog")
     parser.add_argument("--wrapper-log", type=str, required=False,
                         help="Path of the wrapper log file",
-                        default="/opt/xxnetwork/cmix/logs/wrapper.log")
+                        default="/opt/xxnetwork/logs/wrapper.log")
 
     # Elixxir arguments
     parser.add_argument("--binary-path", type=str, required=True,
@@ -714,20 +714,20 @@ def get_args():
     parser.add_argument("--config-path", type=str, required=True,
                         help="Path of the Node/Gateway config file")
     parser.add_argument("--log-path", type=str, required=False,
-                        default="/opt/xxnetwork/cmix/logs/xx.log",
+                        default="/opt/xxnetwork/logs/xx.log",
                         help="Path of the Node/Gateway log file")
     parser.add_argument("--gpu-lib", type=str, required=False,
-                        default="/opt/xxnetwork/cmix/lib/libpowmosm75.so",
+                        default="/opt/xxnetwork/lib/libpowmosm75.so",
                         help="Path of the GPU exponentiation library")
     parser.add_argument("--gpu-bin", type=str, required=False,
-                        default="/opt/xxnetwork/cmix/lib/libpow.fatbin",
+                        default="/opt/xxnetwork/lib/libpow.fatbin",
                         help="Path of the GPU bin file")
     parser.add_argument("--id-path", type=str, required=False,
-                        default="/opt/xxnetwork/cmix/creds/IDF.json",
+                        default="/opt/xxnetwork/creds/IDF.json",
                         help="Path of the Node/Gateway ID file")
     parser.add_argument("--err-path", type=str, required=False,
                         help="Path of the Node error recovery file",
-                        default="/opt/xxnetwork/cmix/logs/node-err.log")
+                        default="/opt/xxnetwork/logs/node-err.log")
     parser.add_argument("--cloudwatch-log-group", type=str, required=False,
                         help="Log group for CloudWatch logging",
                         default="xxnetwork-logs-prod")
@@ -738,7 +738,7 @@ def get_args():
                         default=False)
     parser.add_argument("--consensus-log", type=str, required=False,
                         help="Path of the Consensus log file",
-                        default="/opt/xxnetwork/chain/logs/chain.log")
+                        default="/opt/xxnetwork/logs/chain.log")
     parser.add_argument("--consensus-cw-group", type=str, required=False,
                         help="Log group for Consensus CloudWatch logging",
                         default="xxnetwork-consensus-prod")
