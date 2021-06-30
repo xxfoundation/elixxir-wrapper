@@ -90,7 +90,9 @@ def poll_cmix_hashes(substrate):
             storage_function='CmixHashes',
             params=[]
         )
-        return cmix_hashes
+        result = cmix_hashes.value
+        log.debug("cMix hashes: {}".format(result))
+        return result
     except Exception as e:
         log.error("Connection lost while in \'substrate.query(\"XXNetwork\", \"CmixHashes\")\'. Error: %s" % e)
         return None
@@ -909,7 +911,7 @@ def main():
                             # Get local destination path
                             install_path = valid_paths[Targets.WRAPPER]
                             # Get remote source path
-                            remote_path = "{}/{}".format(management_directory, file_hash)
+                            remote_path = "{}/{}".format(Targets.WRAPPER, file_hash)
                             # Download file to temporary location
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
@@ -927,7 +929,7 @@ def main():
                                 # Get local destination path
                                 install_path = valid_paths[Targets.GPUBIN]
                                 # Get remote source path
-                                remote_path = "{}/{}".format(management_directory, file_hash)
+                                remote_path = "{}/{}".format(Targets.GPUBIN, file_hash)
                                 # Download file to temporary location
                                 tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                                 download(remote_path, tmp_path,
@@ -944,7 +946,7 @@ def main():
                                 # Get local destination path
                                 install_path = valid_paths[Targets.GPULIB]
                                 # Get remote source path
-                                remote_path = "{}/{}".format(management_directory, file_hash)
+                                remote_path = "{}/{}".format(Targets.GPULIB, file_hash)
                                 # Download file to temporary location
                                 tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                                 download(remote_path, tmp_path,
