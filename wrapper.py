@@ -144,7 +144,7 @@ def poll_ready(substrate):
             return
 
         cmix_root = data.value['cmix_root']
-        if cmix_root == cmix_id:
+        if cmix_root == hex_id:
             log.debug("Node found in active validator set: " + val)
             found = True
             break
@@ -580,8 +580,10 @@ def terminate_multiprocess(p):
                  format(pid, p.exitcode))
 
 
-# cmix_id is a static cached cmix id when we successfully read it from the IDF
+# Static cached cmix ID when we successfully read it from the IDF
 cmix_id = None
+# Hex version of the cmix_id passed to the blockchain
+hex_id = None
 
 
 def read_cmix_id(id_path):
@@ -593,7 +595,7 @@ def read_cmix_id(id_path):
     :return: The ID from the IDF
     :rtype: str
     """
-    global cmix_id
+    global cmix_id, hex_id
     # if we've already read it successfully from the file, return it
     if cmix_id:
         return cmix_id
@@ -601,10 +603,14 @@ def read_cmix_id(id_path):
     try:
         if os.path.exists(id_path):
             with open(id_path, 'r') as id_file:
-                new_node_id = json.loads(id_file.read().strip()).get("id", None)
-                if new_node_id:
-                    cmix_id = new_node_id
-                    return new_node_id
+                id_json = json.loads(id_file.read().strip())
+                new_cmix_id = id_json.get("id", None)
+                new_hex_id = id_json.get("hexNodeID", None)
+                if new_hex_id:
+                    hex_id = new_hex_id
+                if new_cmix_id:
+                    cmix_id = new_cmix_id
+                    return cmix_id
     except Exception as error:
         log.warning("Could not open IDF at {}: {}".format(id_path, error))
         return None
