@@ -847,8 +847,15 @@ def main():
     # Keep track of current binary hashes for blockchain updates
     current_hashes = dict()
 
-    # Consensus-specific initialization code
-    if not disable_consensus:
+    if disable_consensus:
+        # Record the most recent command timestamp to avoid executing duplicate commands
+        timestamps = [0, time.time()]
+        remotes_paths = [version_file, command_file]
+    else:
+        # Consensus-specific initialization code
+        timestamps = [time.time()]
+        remotes_paths = [command_file]
+
         # Obtain the current wrapper hash in order to prevent update loop
         wrapper_bytes = bytes(open(valid_paths[Targets.WRAPPER], 'rb').read())
         current_hashes[Targets.WRAPPER] = hashlib.blake2s(wrapper_bytes).hexdigest()
@@ -888,7 +895,6 @@ def main():
 
     # Main command/control loop
     log.info("Script initialized at {}".format(time.time()))
-    remotes_paths = [version_file, command_file]
     while True:
         time.sleep(command_frequency)
 
@@ -903,82 +909,93 @@ def main():
                 if hashes is None:
                     # Connection was lost
                     substrate = None
+                elif not hashes:
+                    # No hashes available, currently syncing
+                    log.info("Waiting for blockchain node to sync...")
                 else:
                     try:
                         # Check for wrapper updates
-                        if hashes.get(Targets.WRAPPER, "") != current_hashes.get(
-                                Targets.WRAPPER, "0x0000000000000000000000000000000000000000000000000000000000000000"):
-                            file_hash = hashes.get(Targets.WRAPPER, "")
+                        new_hash = hashes[Targets.WRAPPER].replace("0x", "")
+                        current_hash = current_hashes.get(
+                            Targets.WRAPPER, "0000000000000000000000000000000000000000000000000000000000000000")
+                        if new_hash != current_hash:
+                            log.info("{} update required: {} -> {}".format(Targets.WRAPPER, current_hash, new_hash))
                             # Get local destination path
                             install_path = valid_paths[Targets.WRAPPER]
                             # Get remote source path
-                            remote_path = "{}/{}".format(Targets.WRAPPER, file_hash)
+                            remote_path = "{}/{}".format(Targets.WRAPPER, new_hash)
                             # Download file to temporary location
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
                                      s3_bin_bucket_name, s3_bucket_region,
                                      s3_access_key_id, s3_access_key_secret)
                             # Perform the update
-                            was_successful = update(Targets.WRAPPER, tmp_path, install_path, file_hash)
+                            was_successful = update(Targets.WRAPPER, tmp_path, install_path, new_hash)
                             if was_successful:
-                                current_hashes[Targets.WRAPPER] = file_hash
+                                current_hashes[Targets.WRAPPER] = new_hash
 
                         if not is_gateway:
                             # Check for GPU bin updates
-                            if hashes.get(Targets.GPUBIN, "") != current_hashes.get(
-                                    Targets.GPUBIN, "0x0000000000000000000000000000000000000000000000000000000000000000"):
-                                file_hash = hashes.get(Targets.GPUBIN, "")
+                            new_hash = hashes[Targets.GPUBIN].replace("0x", "")
+                            current_hash = current_hashes.get(
+                                Targets.GPUBIN, "0000000000000000000000000000000000000000000000000000000000000000")
+                            if new_hash != current_hash:
+                                log.info("{} update required: {} -> {}".format(Targets.GPUBIN, current_hash, new_hash))
                                 # Get local destination path
                                 install_path = valid_paths[Targets.GPUBIN]
                                 # Get remote source path
-                                remote_path = "{}/{}".format(Targets.GPUBIN, file_hash)
+                                remote_path = "{}/{}".format(Targets.GPUBIN, new_hash)
                                 # Download file to temporary location
                                 tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                                 download(remote_path, tmp_path,
                                          s3_bin_bucket_name, s3_bucket_region,
                                          s3_access_key_id, s3_access_key_secret)
                                 # Perform the update
-                                was_successful = update(Targets.GPUBIN, tmp_path, install_path, file_hash)
+                                was_successful = update(Targets.GPUBIN, tmp_path, install_path, new_hash)
                                 if was_successful:
-                                    current_hashes[Targets.GPUBIN] = file_hash
+                                    current_hashes[Targets.GPUBIN] = new_hash
 
                             # Check for GPU lib updates
-                            if hashes.get(Targets.GPULIB, "") != current_hashes.get(
-                                    Targets.GPULIB, "0x0000000000000000000000000000000000000000000000000000000000000000"):
-                                file_hash = hashes.get(Targets.GPULIB, "")
+                            new_hash = hashes[Targets.GPULIB].replace("0x", "")
+                            current_hash = current_hashes.get(
+                                Targets.GPULIB, "0000000000000000000000000000000000000000000000000000000000000000")
+                            if new_hash != current_hash:
+                                log.info("{} update required: {} -> {}".format(Targets.GPULIB, current_hash, new_hash))
                                 # Get local destination path
                                 install_path = valid_paths[Targets.GPULIB]
                                 # Get remote source path
-                                remote_path = "{}/{}".format(Targets.GPULIB, file_hash)
+                                remote_path = "{}/{}".format(Targets.GPULIB, new_hash)
                                 # Download file to temporary location
                                 tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                                 download(remote_path, tmp_path,
                                          s3_bin_bucket_name, s3_bucket_region,
                                          s3_access_key_id, s3_access_key_secret)
                                 # Perform the update
-                                was_successful = update(Targets.GPULIB, tmp_path, install_path, file_hash)
+                                was_successful = update(Targets.GPULIB, tmp_path, install_path, new_hash)
                                 if was_successful:
-                                    current_hashes[Targets.GPULIB] = file_hash
+                                    current_hashes[Targets.GPULIB] = new_hash
 
                         # Check for binary updates
-                        if hashes.get(management_directory, "") != current_hashes.get(
-                                management_directory, "0x0000000000000000000000000000000000000000000000000000000000000000"):
-                            file_hash = hashes.get(management_directory, "")
+                        new_hash = hashes[management_directory].replace("0x", "")
+                        current_hash = current_hashes.get(
+                            management_directory, "0000000000000000000000000000000000000000000000000000000000000000")
+                        if new_hash != current_hash:
+                            log.info("{} update required: {} -> {}".format(management_directory, current_hash, new_hash))
                             # Stop the process
                             terminate_process(process)
                             # Get local destination path
                             install_path = valid_paths[Targets.BINARY]
                             # Get remote source path
-                            remote_path = "{}/{}".format(management_directory, file_hash)
+                            remote_path = "{}/{}".format(management_directory, new_hash)
                             # Download file to temporary location
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
                                      s3_bin_bucket_name, s3_bucket_region,
                                      s3_access_key_id, s3_access_key_secret)
                             # Perform the update
-                            was_successful = update(Targets.BINARY, tmp_path, install_path, file_hash)
+                            was_successful = update(Targets.BINARY, tmp_path, install_path, new_hash)
                             if was_successful:
-                                current_hashes[management_directory] = file_hash
+                                current_hashes[management_directory] = new_hash
                                 # Restart the process
                                 process = start_binary(valid_paths[Targets.BINARY], log_path,
                                                        ["--config", config_file])
