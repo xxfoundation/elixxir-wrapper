@@ -665,9 +665,9 @@ def save_cmd(file_path, dest_dir, valid, cmd_time):
 
     fparts = os.path.basename(file_path).split('.')
     if not valid:
-        fparts[0] = "INVALID_{}".format(fparts[0])
-    # destdir/command_2849204.json
-    dest = "{}/{}_{}.{}".format(dest_dir, fparts[0], int(cmd_time), fparts[1])
+        fparts[0] = "INVALID-{}".format(fparts[0])
+    # destdir/command-2849204.json
+    dest = "{}/{}-{}.{}".format(dest_dir, fparts[0], int(cmd_time), fparts[1])
     shutil.copyfile(file_path, dest)
 
 
@@ -705,16 +705,16 @@ def get_args():
                         default=False)
     parser.add_argument("--management-cert", type=str, required=False,
                         help="Path of the management certificate file",
-                        default="/opt/xxnetwork/creds/network_management.crt")
+                        default="/opt/xxnetwork/creds/network-management.crt")
     parser.add_argument("--tmp-dir", type=str, required=False,
                         help="Directory for placing temporary files",
                         default="/tmp")
     parser.add_argument("--cmd-dir", type=str, required=False,
                         help="Directory used for saving command file history",
-                        default="/opt/xxnetwork/logs/cmdlog")
+                        default="/opt/xxnetwork/log/cmdlog")
     parser.add_argument("--wrapper-log", type=str, required=False,
                         help="Path of the wrapper log file",
-                        default="/opt/xxnetwork/logs/wrapper.log")
+                        default="/opt/xxnetwork/log/wrapper.log")
 
     # Elixxir arguments
     parser.add_argument("--binary-path", type=str, required=True,
@@ -722,7 +722,7 @@ def get_args():
     parser.add_argument("--config-path", type=str, required=True,
                         help="Path of the Node/Gateway config file")
     parser.add_argument("--log-path", type=str, required=False,
-                        default="/opt/xxnetwork/logs/xx.log",
+                        default="/opt/xxnetwork/log/xx.log",
                         help="Path of the Node/Gateway log file")
     parser.add_argument("--gpu-lib", type=str, required=False,
                         default="/opt/xxnetwork/lib/libpowmosm75.so",
@@ -731,7 +731,7 @@ def get_args():
                         default="/opt/xxnetwork/lib/libpow.fatbin",
                         help="Path of the GPU bin file")
     parser.add_argument("--id-path", type=str, required=False,
-                        default="/opt/xxnetwork/creds/IDF.json",
+                        default="/opt/xxnetwork/cred/IDF.json",
                         help="Path of the Node/Gateway ID file")
     parser.add_argument("--err-path", type=str, required=False,
                         help="Path of the Node error recovery file",
@@ -746,7 +746,7 @@ def get_args():
                         default=False)
     parser.add_argument("--consensus-log", type=str, required=False,
                         help="Path of the Consensus log file",
-                        default="/opt/xxnetwork/logs/chain.log")
+                        default="/opt/xxnetwork/log/chain.log")
     parser.add_argument("--consensus-cw-group", type=str, required=False,
                         help="Log group for Consensus CloudWatch logging",
                         default="xxnetwork-consensus-prod")
