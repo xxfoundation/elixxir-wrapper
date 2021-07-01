@@ -698,8 +698,12 @@ def get_args():
                         default="us-west-1")
 
     # Wrapper arguments
+    parser.add_argument("--verbose", action='store_true', required=False,
+                        help="Print debug information",
+                        default=False)
     parser.add_argument("--gateway", action="store_true", required=False,
-                        help="Enable gateway mode")
+                        help="Enable gateway mode",
+                        default=False)
     parser.add_argument("--disable-cloudwatch", action="store_true", required=False,
                         help="Disable uploading log events to CloudWatch",
                         default=False)
@@ -722,17 +726,17 @@ def get_args():
     parser.add_argument("--config-path", type=str, required=True,
                         help="Path of the Node/Gateway config file")
     parser.add_argument("--log-path", type=str, required=False,
-                        default="/opt/xxnetwork/log/xx.log",
-                        help="Path of the Node/Gateway log file")
+                        help="Path of the Node/Gateway log file",
+                        default="/opt/xxnetwork/log/xx.log")
     parser.add_argument("--gpu-lib", type=str, required=False,
-                        default="/opt/xxnetwork/lib/libpowmosm75.so",
-                        help="Path of the GPU exponentiation library")
+                        help="Path of the GPU exponentiation library",
+                        default="/opt/xxnetwork/lib/libpowmosm75.so")
     parser.add_argument("--gpu-bin", type=str, required=False,
-                        default="/opt/xxnetwork/lib/libpow.fatbin",
-                        help="Path of the GPU bin file")
+                        help="Path of the GPU bin file",
+                        default="/opt/xxnetwork/lib/libpow.fatbin")
     parser.add_argument("--id-path", type=str, required=False,
-                        default="/opt/xxnetwork/cred/IDF.json",
-                        help="Path of the Node/Gateway ID file")
+                        help="Path of the Node/Gateway ID file",
+                        default="/opt/xxnetwork/cred/IDF.json")
     parser.add_argument("--err-path", type=str, required=False,
                         help="Path of the Node error recovery file",
                         default="/opt/xxnetwork/logs/node-err.log")
@@ -759,7 +763,8 @@ def get_args():
 
     # Configure logger
     log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
-                    level=log.INFO, datefmt='%d-%b-%y %H:%M:%S',
+                    level=log.DEBUG if args["verbose"] else log.INFO,
+                    datefmt='%d-%b-%y %H:%M:%S',
                     filename=args["wrapper_log"])
 
     # Handle unknown args
@@ -911,7 +916,7 @@ def main():
                     substrate = None
                 elif not hashes:
                     # No hashes available, currently syncing
-                    log.info("Waiting for blockchain node to sync...")
+                    log.debug("Waiting for blockchain node to sync...")
                 else:
                     try:
                         # Check for wrapper updates
