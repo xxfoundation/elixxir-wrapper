@@ -17,14 +17,13 @@ node_cert = "creds/node_cert.crt"
 gw_key = "creds/gateway_key.key"
 gw_cert = "creds/gateway_cert.crt"
 node_idf = "creds/nodeIDF.json"
-gw_idf = "creds/gatewayIDF.json"
 
 
 def main():
     if os.path.exists('creds'):
         if os.path.exists(node_key) and os.path.exists(gw_key) \
                 and os.path.exists(node_cert) and os.path.exists(gw_cert) \
-                and os.path.exists(node_idf) and os.path.exists(gw_idf):
+                and os.path.exists(node_idf):
             print("Generation has already completed")
             return
     print("This script will ask you to input information to be used in key generation.")
@@ -79,10 +78,8 @@ subjectAltName=DNS:%s
     subprocess.run(node_gen_command)
     print("~~~~~")
     subprocess.run(gw_gen_command)
-    node_idf_command = ["id-generation", "generate", "-p", node_cert, "-o", node_idf]
-    gw_idf_command = ["id-generation", "generate", "-p", gw_cert, "-o", gw_idf]
+    node_idf_command = ["./bin/id-generation", "generate", "-p", node_cert, "-o", node_idf]
     subprocess.run(node_idf_command)
-    subprocess.run(gw_idf_command)
     os.remove("cert.conf")
 
 
