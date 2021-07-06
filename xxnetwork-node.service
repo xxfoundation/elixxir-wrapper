@@ -1,5 +1,5 @@
 [Unit]
-Description=Job that starts the Wrapper service
+Description=Job that starts the cMix Wrapper service
 StartLimitIntervalSec=5
 StartLimitBurst=10
 After=local-fs.target network-online.target network.target
@@ -9,7 +9,28 @@ Wants=local-fs.target network-online.target network.target
 User=ubuntu
 Type=simple
 
-ExecStart=/bin/bash -c '/opt/xxnetwork/xxnetwork-wrapper.py --logpath /opt/xxnetwork/node-logs/node.log --binary /opt/xxnetwork/bin/xxnetwork-node --s3path server --s3logbucket alphanet-logs-prod --s3managementbucket alphanet-management-prod --s3accesskey ${s3_access_key_id} --s3secret ${s3_access_key_secret} --s3region us-west-1 --configdir /opt/xxnetwork/ --erroutputpath /opt/xxnetwork/node-logs/node-err.log --tmpdir /tmp/xxnetwork/node --idpath /opt/xxnetwork/node-logs/nodeIDF.json >> /opt/xxnetwork/node-logs/xxnetwork-wrapper.log 2>&1'
+ExecStart=/opt/xxnetwork/cmix-wrapper.py \
+--s3-access-key {{ KEY }} \
+--s3-secret {{ SECRET }} \
+--s3-management-bucket alphanet-management-prod \
+--s3-bin-bucket elixxir-bins \
+--s3-region us-west-1 \
+--management-cert /opt/xxnetwork/cred/network-management.crt \
+--tmp-dir /tmp/xxnetwork/cmix \
+--cmd-dir /opt/xxnetwork/log/cmix-cmd \
+--wrapper-log /opt/xxnetwork/log/cmix-wrapper.log \
+--binary-path /opt/xxnetwork/bin/xxnetwork-cmix \
+--config-path /opt/xxnetwork/config/cmix.yaml \
+--log-path /opt/xxnetwork/log/cmix.log \
+--gpu-lib /opt/xxnetwork/lib/libpowmosm75.so \
+--gpu-bin /opt/xxnetwork/lib/libpow.fatbin \
+--id-path /opt/xxnetwork/cred/cmix-IDF.json \
+--err-path /opt/xxnetwork/log/cmix-err.log \
+--cloudwatch-log-group xxnetwork-logs-prod \
+--consensus-log /opt/xxnetwork/log/chain.log \
+--consensus-cw-group xxnetwork-consensus-prod \
+--consensus-url ws://localhost:30334
+
 LimitNOFILE=infinity
 Restart=always
 
