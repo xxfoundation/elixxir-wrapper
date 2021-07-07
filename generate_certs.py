@@ -12,15 +12,16 @@
 import os
 import subprocess
 
-node_key = "creds/node_key.key"
-node_cert = "creds/node_cert.crt"
-gw_key = "creds/gateway_key.key"
-gw_cert = "creds/gateway_cert.crt"
-node_idf = "creds/nodeIDF.json"
+dir_name = "cred"
+node_key = f"{dir_name}/cmix-key.key"
+node_cert = f"{dir_name}/cmix-cert.crt"
+gw_key = f"{dir_name}/gateway-key.key"
+gw_cert = f"{dir_name}/gateway-cert.crt"
+node_idf = f"{dir_name}/cmix-IDF.json"
 
 
 def main():
-    if os.path.exists('creds'):
+    if os.path.exists(dir_name):
         if os.path.exists(node_key) and os.path.exists(gw_key) \
                 and os.path.exists(node_cert) and os.path.exists(gw_cert) \
                 and os.path.exists(node_idf):
@@ -64,8 +65,8 @@ subjectAltName=DNS:%s
     f.close()
 
     # Form full subject string
-    if not os.path.exists('creds'):
-        os.mkdir("creds")
+    if not os.path.exists(dir_name):
+        os.mkdir(dir_name)
     subj = "/C=%s/ST=%s/L=%s/O=%s/OU=%s/CN=%s/emailAddress=%s" % \
            (country, state, locality, organization, organizational_unit, domain, email)
 
