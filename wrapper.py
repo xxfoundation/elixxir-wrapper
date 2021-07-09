@@ -756,7 +756,7 @@ def get_args():
                         default="xxnetwork-consensus-prod")
     parser.add_argument("--consensus-url", type=str, required=False,
                         help="Listening address for blockchain-provided binary updates",
-                        default="ws://localhost:30334")
+                        default="ws://localhost:63007")
 
     args, unknown = parser.parse_known_args()
     args = vars(args)
