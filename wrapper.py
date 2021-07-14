@@ -689,7 +689,7 @@ def get_args():
                         help="S3 access key secret")
     parser.add_argument("--s3-management-bucket", type=str, required=False,
                         help="S3 management bucket name",
-                        default="alphanet-management-prod")
+                        default="elixxir-management-mainnet")
     parser.add_argument("--s3-bin-bucket", type=str, required=False,
                         help="S3 binary bucket name",
                         default="elixxir-bins")
@@ -715,18 +715,18 @@ def get_args():
                         default="/tmp")
     parser.add_argument("--cmd-dir", type=str, required=False,
                         help="Directory used for saving command file history",
-                        default="/opt/xxnetwork/log/cmdlog")
+                        default="/opt/xxnetwork/log/cmd")
     parser.add_argument("--wrapper-log", type=str, required=False,
-                        help="Path of the wrapper log file",
+                        help="Path of the wrapper script log file",
                         default="/opt/xxnetwork/log/wrapper.log")
 
-    # Elixxir arguments
+    # cMix/Gateway arguments
     parser.add_argument("--binary-path", type=str, required=True,
-                        help="Path of the Node/Gateway binary")
+                        help="Path of the cMix/Gateway binary")
     parser.add_argument("--config-path", type=str, required=True,
-                        help="Path of the Node/Gateway config file")
+                        help="Path of the cMix/Gateway config file")
     parser.add_argument("--log-path", type=str, required=False,
-                        help="Path of the Node/Gateway log file",
+                        help="Path of the cMix/Gateway log file",
                         default="/opt/xxnetwork/log/xx.log")
     parser.add_argument("--gpu-lib", type=str, required=False,
                         help="Path of the GPU exponentiation library",
@@ -735,14 +735,14 @@ def get_args():
                         help="Path of the GPU bin file",
                         default="/opt/xxnetwork/lib/libpow.fatbin")
     parser.add_argument("--id-path", type=str, required=False,
-                        help="Path of the Node/Gateway ID file",
+                        help="Path of the cMix/Gateway ID file",
                         default="/opt/xxnetwork/cred/IDF.json")
     parser.add_argument("--err-path", type=str, required=False,
-                        help="Path of the Node error recovery file",
-                        default="/opt/xxnetwork/logs/node-err.log")
+                        help="Path of the cMix error recovery file",
+                        default="/opt/xxnetwork/logs/cmix-err.log")
     parser.add_argument("--cloudwatch-log-group", type=str, required=False,
                         help="Log group for CloudWatch logging",
-                        default="xxnetwork-logs-prod")
+                        default="xxnetwork-logs-mainnet")
 
     # Consensus arguments
     parser.add_argument("--disable-consensus", action="store_true", required=False,
@@ -753,10 +753,10 @@ def get_args():
                         default="/opt/xxnetwork/log/chain.log")
     parser.add_argument("--consensus-cw-group", type=str, required=False,
                         help="Log group for Consensus CloudWatch logging",
-                        default="xxnetwork-consensus-prod")
+                        default="xxnetwork-consensus-mainnet")
     parser.add_argument("--consensus-url", type=str, required=False,
                         help="Listening address for blockchain-provided binary updates",
-                        default="ws://localhost:30334")
+                        default="ws://localhost:63007")
 
     args, unknown = parser.parse_known_args()
     args = vars(args)
