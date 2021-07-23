@@ -586,8 +586,8 @@ def get_args():
 
 class Targets:
     BINARY = 'binary'
-    GPULIB = 'gpulib'
-    GPUBIN = 'gpubin'
+    GPULIB = 'libpow'
+    GPUBIN = 'fatbin'
     WRAPPER = 'wrapper'
     CERT = 'cert'
     CONSENSUS_BINARY = 'consensus_binary'
@@ -860,7 +860,7 @@ def main():
                         # Ensure the hash of the downloaded file matches the hash in the command
                         update_bytes = bytes(open(tmp_path, 'rb').read())
                         actual_hash = hashlib.sha256(update_bytes).hexdigest()
-                        expected_hash = info.get("sha256sum", "")
+                        expected_hash = info.get("hash", "")
                         if actual_hash != expected_hash:
                             os.remove(path=tmp_path)
                             log.error("Downloaded file {} does not match provided hash. Expected {}, got {}".format(
