@@ -140,6 +140,33 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
                 log_file_path, os.path.getsize(log_file_path)))
 
 
+def check_networking():
+    """
+    check_networking checks for networking settings essential for operation of
+    cMix.
+    """
+    slowcmd = [
+        "sudo /bin/bash -c \"echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle\"",
+        "sudo /bin/bash -c \'echo \"net.ipv4.tcp_slow_start_after_idle=0\" >> /etc/sysctl.conf\'"
+    ]
+    networking_good = True
+    slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().strip()
+    if '0' not in slowsetting:
+        log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format(
+                    '\n\t'.join(slowcmd)))
+        networking_good = False
+    else:
+        networking_good = True
+    # Alternatively, if the initial windows are 700, that's acceptable
+    # too.
+    if not networking_good:
+        ipsetting = subprocess.run(['ip', 'route', 'show'], stdout=subprocess.PIPE)
+        ipsettingout = ipsetting.stdout.decode('utf-8')
+        if 'initcwnd 700' in ipsettingout and 'initrwnd 700' in ipsettingout:
+            networking_good = True
+    return networking_good
+
+
 def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     """
     Initialize client for cloudwatch logging
@@ -665,7 +692,6 @@ def main():
     # Frequency (in seconds) of checking for new commands
     command_frequency = 10
     log.info("Script initialized at {}".format(time.time()))
-
     # Main command/control loop
     while True:
         time.sleep(command_frequency)
@@ -747,6 +773,14 @@ def main():
 
                     # START COMMAND ===========================
                     if command_type == "start":
+
+                        # Ensure network settings are properly configured before allowing a start
+                        if not check_networking():
+                            log.error("Unacceptable network settings, refusing to start. "
+                                      "Run the suggested commands")
+                            timestamps[i] = timestamp
+                            continue
+
                         # Decide which type of binary to start
                         if target == Targets.BINARY and (process is None or process.poll() is not None):
                             process = start_binary(valid_paths[Targets.BINARY], log_path,
