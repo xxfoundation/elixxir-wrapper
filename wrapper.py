@@ -1141,7 +1141,7 @@ def main():
                         # Verify valid install path
                         if target not in valid_paths.keys():
                             log.error("Invalid update target: {}. Expected one of: {}".format(
-                                target, valid_paths.values()))
+                                target, valid_paths.keys()))
                             timestamps[i] = timestamp
                             continue
 
