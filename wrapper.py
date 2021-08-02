@@ -34,7 +34,7 @@ import hashlib
 ########################################################################################################################
 
 # Static variable detailing the Blockchain interface
-json_data="{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"struct\", \"type_mapping\": [[\"commission\", \"Compact<Perbill>\"], [\"blocked\", \"bool\"], [\"cmix_root\", \"Hash\"]]}, \"cmix_hashes::CmixSoftwareHashes\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
+json_data="{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"struct\", \"type_mapping\": [[\"commission\", \"Compact<Perbill>\"], [\"blocked\", \"bool\"], [\"cmix_root\", \"Hash\"]]}, \"cmix::SoftwareHashes<Hash>\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
 
 
 def get_substrate_provider(consensus_url):
