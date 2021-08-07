@@ -873,13 +873,14 @@ def main():
                 time.sleep(command_frequency)
 
             # Wait for the node to stake before entering the main loop
-            log.info("Waiting on consensus...")
             substrate = get_substrate_provider(consensus_url)
+            log.info("Waiting on consensus ready state...")
             while True:
                 while substrate is None:
                     time.sleep(command_frequency)
                     substrate = get_substrate_provider(consensus_url)
                 if poll_ready(substrate):
+                    log.info("Consensus ready!")
                     break
                 time.sleep(command_frequency)
 
