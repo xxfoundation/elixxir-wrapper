@@ -79,7 +79,7 @@ subjectAltName=DNS:%s
     subprocess.run(node_gen_command)
     print("~~~~~")
     subprocess.run(gw_gen_command)
-    node_idf_command = ["./bin/id-generation", "generate", "-p", node_cert, "-o", node_idf]
+    node_idf_command = ["./bin/id-generation", "-c", node_cert, "-o", node_idf]
     subprocess.run(node_idf_command)
     os.remove("cert.conf")
 
