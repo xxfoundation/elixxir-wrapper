@@ -7,7 +7,8 @@
 # // LICENSE file                                                              //
 # ///////////////////////////////////////////////////////////////////////////////
 
-# This script wraps the cMix binaries to provide system management
+# This script wraps xx network binaries to provide system management
+# via command files, binary updates via blockchain, as well as network logging
 
 import argparse
 import base64
@@ -19,17 +20,144 @@ import subprocess
 import sys
 import multiprocessing
 import time
-import uuid
 import boto3
 from botocore.config import Config
 import botocore.exceptions
-import tarfile
 import shutil
 from OpenSSL import crypto
+from substrateinterface import SubstrateInterface
 import hashlib
 
 
-# FUNCTIONS --------------------------------------------------------------------
+########################################################################################################################
+# Blockchain Updates
+########################################################################################################################
+
+# Static variable detailing the Blockchain interface
+json_data="{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"struct\", \"type_mapping\": [[\"commission\", \"Compact<Perbill>\"], [\"blocked\", \"bool\"], [\"cmix_root\", \"Hash\"]]}, \"cmix::SoftwareHashes<Hash>\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
+
+
+def get_substrate_provider(consensus_url):
+    """
+    Get Substrate Provider to Listening on websocket of the Substrate Node configured with network registry json file
+
+    :param consensus_url: listening address:port of the substrate server
+    :return: Substrate Network Provider used to query blockchain
+    """
+    try:
+        return SubstrateInterface(
+            url=consensus_url,
+            type_registry_preset='substrate-node-template',
+            type_registry=json.loads(json_data)
+        )
+    except ConnectionRefusedError:
+        log.error("No local Substrate node running.")
+        return None
+    except Exception as e:
+        log.error("Failed to get substrate chain connection: %s" % e)
+        return None
+
+
+def check_sync(substrate):
+    """
+    Polls Substrate Chain to determine whether the Node is synced
+
+    :param substrate: The active substrate connection
+    :return: True if Node is synced, else False
+    """
+    try:
+        result = substrate.rpc_request('system_syncState', []).get('result')
+        return result["currentBlock"] == result["highestBlock"]
+    except Exception as e:
+        log.error("Failed to query sync state: %s" % e)
+    return False
+
+
+def poll_cmix_hashes(substrate):
+    """
+    Polls Substrate Chain information to feed cmix with the current cmix hashes
+
+    :param substrate: The active substrate connection
+    :return: dictionary with cmix hashes, empty dict if not synced, or None if an Exception occurred
+    """
+    # Check if node is fully synced
+    if check_sync(substrate) is False:
+        return dict()
+
+    try:
+        cmix_hashes = substrate.query(
+            module='XXNetwork',
+            storage_function='CmixHashes',
+            params=[]
+        )
+        result = cmix_hashes.value
+        log.debug("cMix hashes: {}".format(result))
+        return result
+    except Exception as e:
+        log.error("Connection lost while in \'substrate.query(\"XXNetwork\", \"CmixHashes\")\'. Error: %s" % e)
+        return None
+
+
+def poll_ready(substrate):
+    """
+    Polls Substrate Chain information to feed cmix with the node's state
+
+    :param substrate: The active substrate connection
+    :return: True if node is ready, else false
+    """
+    try:
+        validator_set = substrate.query("Session", "Validators")
+    except Exception as e:
+        log.error("Connection lost while in \'substrate.query(\"Session\", \"Validators\")\'. Error: %s" % e)
+        return
+
+    try:
+        disabled_set = substrate.query("Session", "DisabledValidators")
+    except Exception as e:
+        log.error("Connection lost while in \'substrate.query(\"Session\", \"DisabledValidators\")\'. Error: %s" % e)
+        return
+
+    for val in disabled_set.value:
+        validator_set.value.pop(val)
+
+    try:
+        active_era = substrate.query(
+            module='Staking',
+            storage_function='ActiveEra',
+            params=[]
+        )
+    except Exception as e:
+        log.error("Connection lost while in \'substrate.query(\"Staking\", \"ActiveEra\")\'. Error: %s" % e)
+        return
+
+    era = active_era.value['index']
+    log.debug(f"Era = {era}")
+
+    found = False
+    for val in validator_set.value:
+        try:
+            data = substrate.query(
+                module='Staking',
+                storage_function='ErasValidatorPrefs',
+                params=[era, val]
+            )
+        except Exception as e:
+            log.error(f"Connection lost while in \'substrate.query(\"Staking\", \"ErasValidatorPrefs\", [{era}, {val}])\'. Error: %s" % e)
+            return
+
+        cmix_root = data.value['cmix_root']
+        if cmix_root == hex_id:
+            log.debug("Node found in active validator set: " + val)
+            found = True
+            break
+        if found is False:
+            log.debug("Node not in validator set for current era, waiting...")
+    return found
+
+
+########################################################################################################################
+# Logging
+########################################################################################################################
 
 
 def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access_key_id, access_key_secret):
@@ -47,9 +175,6 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
     :return The newly created logging process
     :rtype multiprocessing.Process
     """
-    # If there is already a log file, open it here so we don't lose records
-    log_file = None
-
     # Configure boto retries
     config = Config(
         retries=dict(
@@ -64,6 +189,7 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
                           config=config)
 
     # Open the log file read-only and pin its current size if it already exists
+    log_file = None
     if os.path.isfile(log_file_path):
         log_file = open(log_file_path, 'r')
         log_file.seek(0, os.SEEK_END)
@@ -89,7 +215,6 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     :param log_file_path: Path to the log file
     :param id_path: path to node's id file
     """
-    global read_node_id
     # Constants
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
@@ -140,33 +265,6 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
                 log_file_path, os.path.getsize(log_file_path)))
 
 
-def check_networking():
-    """
-    check_networking checks for networking settings essential for operation of
-    cMix.
-    """
-    slowcmd = [
-        "sudo /bin/bash -c \"echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle\"",
-        "sudo /bin/bash -c \'echo \"net.ipv4.tcp_slow_start_after_idle=0\" >> /etc/sysctl.conf\'"
-    ]
-    networking_good = True
-    slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().strip()
-    if '0' not in slowsetting:
-        log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format(
-                    '\n\t'.join(slowcmd)))
-        networking_good = False
-    else:
-        networking_good = True
-    # Alternatively, if the initial windows are 700, that's acceptable
-    # too.
-    if not networking_good:
-        ipsetting = subprocess.run(['ip', 'route', 'show'], stdout=subprocess.PIPE)
-        ipsettingout = ipsetting.stdout.decode('utf-8')
-        if 'initcwnd 700' in ipsettingout and 'initrwnd 700' in ipsettingout:
-            networking_good = True
-    return networking_good
-
-
 def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     """
     Initialize client for cloudwatch logging
@@ -177,28 +275,24 @@ def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
     :param log_file: log file to read lines from
     :return log_file, client, log_stream_name, upload_sequence_token:
     """
-    global read_node_id
     upload_sequence_token = ""
 
-    # If the log file does not already exist, wait for it
+    # Wait for the IDF in order to use ID as log prefix
+    log.info("Waiting for IDF...")
+    while read_cmix_id(id_path) is None:
+        time.sleep(10)
+    log_prefix = read_cmix_id(id_path)
+
+    log_name = os.path.basename(log_file_path)  # Name of the log file
+    log_stream_name = "{}-{}".format(log_prefix, log_name)  # Stream name should be {ID}-{node/gateway/wrapper}.log
+
+    # Wait for the log file to exist, then open it
     if not log_file:
+        log.info("Waiting for {}...".format(log_file_path))
         while not os.path.isfile(log_file_path):
             time.sleep(1)
         # Open the newly-created log file as read-only
         log_file = open(log_file_path, 'r')
-
-    # Define prefix for log stream - should be ID based on file
-    if read_node_id:
-        log_prefix = read_node_id
-    # Read node ID from the file
-    else:
-        log.info("Waiting for ID file...")
-        while not os.path.exists(id_path):
-            time.sleep(1)
-        log_prefix = get_node_id(id_path)
-
-    log_name = os.path.basename(log_file_path)  # Name of the log file
-    log_stream_name = "{}-{}".format(log_prefix, log_name)  # Stream name should be {ID}-{node/gateway}.log
 
     try:
         # Determine if stream exists.  If not, make one.
@@ -232,7 +326,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
     :param log_events: current array of events
     :return:
     """
-    # using these to deliniate the start of an event
+    # using these to delineate the start of an event
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL", "TRACE"]
 
     # This controls how long we should wait after a line before assuming it's the end of an event
@@ -320,6 +414,38 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
         return upload_sequence_token, ok
 
 
+########################################################################################################################
+# Command Functions
+########################################################################################################################
+
+
+def check_networking():
+    """
+    check_networking checks for networking settings essential for operation of
+    cMix.
+    """
+    slowcmd = [
+        "sudo /bin/bash -c \"echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle\"",
+        "sudo /bin/bash -c \'echo \"net.ipv4.tcp_slow_start_after_idle=0\" >> /etc/sysctl.conf\'"
+    ]
+    networking_good = True
+    slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().strip()
+    if '0' not in slowsetting:
+        log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format(
+            '\n\t'.join(slowcmd)))
+        networking_good = False
+    else:
+        networking_good = True
+    # Alternatively, if the initial windows are 700, that's acceptable
+    # too.
+    if not networking_good:
+        ipsetting = subprocess.run(['ip', 'route', 'show'], stdout=subprocess.PIPE)
+        ipsettingout = ipsetting.stdout.decode('utf-8')
+        if 'initcwnd 700' in ipsettingout and 'initrwnd 700' in ipsettingout:
+            networking_good = True
+    return networking_good
+
+
 def download(src_path, dst_path, s3_bucket, region,
              access_key_id, access_key_secret):
     """
@@ -353,6 +479,52 @@ def download(src_path, dst_path, s3_bucket, region,
     except Exception as error:
         log.error("Unable to download {} from {}: {}".format(src_path, s3_bucket, error),
                   exc_info=True)
+
+
+def update(target, tmp_path, install_path, expected_hash):
+    """
+    Update the current file with a staged file, assuming hashes match
+
+    :param target: Update type as defined by Targets class
+    :param tmp_path: Staged update file
+    :param install_path: Path to update the staged file over
+    :param expected_hash: Hash that is expected to match the staged file
+    :return: True if update successful, else false
+    """
+    # Ensure the hash of the downloaded file matches the hash in the command
+    update_bytes = bytes(open(tmp_path, 'rb').read())
+    actual_hash = hashlib.blake2s(update_bytes).hexdigest()
+    if actual_hash != expected_hash:
+        os.remove(path=tmp_path)
+        log.error("Downloaded file {} does not match provided hash. Expected {}, got {}".format(
+            tmp_path, expected_hash, actual_hash))
+        return False
+
+    # Move the downloaded file into place, overwriting anything that's there
+    try:
+        os.makedirs(os.path.dirname(install_path), exist_ok=True)
+        os.replace(tmp_path, install_path)
+    except Exception as err:
+        log.error("Could not overwrite {} with {}: {}".format(
+            install_path, tmp_path, err))
+        return False
+
+    # Handle binary updates
+    if target == Targets.BINARY:
+        os.chmod(install_path, stat.S_IEXEC)
+
+    # Handle GPU library updates
+    if target == Targets.GPULIB or target == Targets.GPUBIN:
+        os.chmod(install_path, stat.S_IREAD)
+
+    # Handle wrapper updates
+    if target == Targets.WRAPPER:
+        os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
+        log.info("Wrapper script updated, exiting now...")
+        os._exit(0)
+
+    # Return successfully
+    return True
 
 
 def start_binary(bin_path, log_file_path, bin_args):
@@ -410,41 +582,40 @@ def terminate_multiprocess(p):
                  format(pid, p.exitcode))
 
 
-# generated_uuid is a static cached UUID used as the node_id
-generated_uuid = None
-# read_node_id is a static cached node id when we successfully read it
-read_node_id = None
+# Static cached cmix ID when we successfully read it from the IDF
+cmix_id = None
+# Hex version of the cmix_id passed to the blockchain
+hex_id = None
 
 
-def get_node_id(id_path):
+def read_cmix_id(id_path):
     """
-    Obtain the ID of the running node.
+    Obtain the ID of the running node/gateway.
 
-    :param id_path: the path to the node id
+    :param id_path: the path to the IDF
     :type id_path: str
-    :return: The node id OR a UUID by host and time if node id file absent
+    :return: The ID from the IDF
     :rtype: str
     """
-    global generated_uuid, read_node_id
+    global cmix_id, hex_id
     # if we've already read it successfully from the file, return it
-    if read_node_id:
-        return read_node_id
+    if cmix_id:
+        return cmix_id
     # Read it from the file
     try:
         if os.path.exists(id_path):
             with open(id_path, 'r') as id_file:
-                new_node_id = json.loads(id_file.read().strip()).get("id", None)
-                if new_node_id:
-                    read_node_id = new_node_id
-                    return new_node_id
+                id_json = json.loads(id_file.read().strip())
+                new_cmix_id = id_json.get("id", None)
+                new_hex_id = id_json.get("hexNodeID", None)
+                if new_hex_id:
+                    hex_id = new_hex_id
+                if new_cmix_id:
+                    cmix_id = new_cmix_id
+                    return cmix_id
     except Exception as error:
-        log.warning("Could not open node ID at {}: {}".format(id_path, error))
-
-    # If that fails, then generate, or use the last generated UUID
-    if not generated_uuid:
-        generated_uuid = str(uuid.uuid1())
-        log.warning("Generating random instance ID: {}".format(generated_uuid))
-    return generated_uuid
+        log.warning("Could not open IDF at {}: {}".format(id_path, error))
+        return None
 
 
 def verify_cmd(in_buf, public_key_path):
@@ -494,11 +665,15 @@ def save_cmd(file_path, dest_dir, valid, cmd_time):
 
     fparts = os.path.basename(file_path).split('.')
     if not valid:
-        fparts[0] = "INVALID_{}".format(fparts[0])
-    # destdir/command_2849204.json
-    dest = "{}/{}_{}.{}".format(dest_dir, fparts[0], int(cmd_time), fparts[1])
+        fparts[0] = "INVALID-{}".format(fparts[0])
+    # destdir/command-2849204.json
+    dest = "{}/{}-{}.{}".format(dest_dir, fparts[0], int(cmd_time), fparts[1])
     shutil.copyfile(file_path, dest)
 
+
+########################################################################################################################
+# Control Flow
+########################################################################################################################
 
 def get_args():
     """
@@ -506,79 +681,96 @@ def get_args():
     :return arguments in dict format:
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--disableupdates", action="store_true",
-                        help="Disable automatic updates",
-                        default=False, required=False)
-    parser.add_argument("-l", "--logpath", type=str, default="/opt/xxnetwork/logs/xx.log",
-                        help="The path to store logs, e.g. /opt/xxnetwork/node-logs/node.log",
-                        required=False)
-    parser.add_argument("-i", "--idpath", type=str,
-                        default="/opt/xxnetwork/logs/IDF.json",
-                        help="Node ID path, e.g. /opt/xxnetwork/logs/nodeIDF.json",
-                        required=False)
-    parser.add_argument("-b", "--binary", type=str,
-                        help="Path of the binary to be run by the wrapper",
-                        required=True)
-    parser.add_argument("--gpulib", type=str,
-                        default="/opt/xxnetwork/lib/libpowmosm75.so",
-                        help="Path to the gpu exponentiation library",
-                        required=False)
-    parser.add_argument("--gpubin", type=str,
-                        default="/opt/xxnetwork/lib/libpow.fatbin",
-                        help="Path to the gpu bin file",
-                        required=False)
-    parser.add_argument("--disable-consensus", action="store_true",
-                        help="Disable consensus binary",
-                        default=True, required=False)
-    parser.add_argument("--consensus-binary", type=str,
-                        help="Path to the consensus binary",
-                        required=False, default="/opt/xxnetwork/bin/xxnetwork-consensus")
-    parser.add_argument("--consensus-config", type=str,
-                        help="Path to the consensus config file",
-                        required=False, default="/opt/xxnetwork/consensus.yaml")
-    parser.add_argument("--consensus-state", type=str,
-                        help="Path to the consensus state tarball",
-                        required=False, default="/opt/xxnetwork/consensus.tar.gz")
-    parser.add_argument("--consensus-log", type=str,
-                        help="Path to the consensus log file",
-                        required=False, default="/opt/xxnetwork/consensus-logs/consensus.log")
-    parser.add_argument("--consensus-cw-group", type=str,
-                        help="CW log group for consensus logs",
-                        required=False, default="xxnetwork-consensus-prod")
-    parser.add_argument("-c", "--configdir", type=str, required=False,
-                        help="Path to the config dir, e.g., ~/.xxnetwork/",
-                        default="/opt/xxnetwork/")
-    parser.add_argument("-s", "--s3path", type=str, required=True,
-                        help="Path to the s3 management directory")
-    parser.add_argument("-m", "--s3managementbucket", type=str,
-                        help="Path to the s3 management bucket name")
-    parser.add_argument("--disable-cloudwatch", action="store_true",
+
+    # Management arguments
+    parser.add_argument("--s3-access-key", type=str, required=True,
+                        help="S3 access key")
+    parser.add_argument("--s3-secret", type=str, required=True,
+                        help="S3 access key secret")
+    parser.add_argument("--s3-management-bucket", type=str, required=False,
+                        help="S3 management bucket name",
+                        default="elixxir-management-mainnet")
+    parser.add_argument("--s3-bin-bucket", type=str, required=False,
+                        help="S3 binary bucket name",
+                        default="elixxir-bins")
+    parser.add_argument("--s3-region", type=str, required=False,
+                        help="S3 region",
+                        default="us-west-1")
+
+    # Wrapper arguments
+    parser.add_argument("--verbose", action='store_true', required=False,
+                        help="Print debug information",
+                        default=False)
+    parser.add_argument("--gateway", action="store_true", required=False,
+                        help="Enable gateway mode",
+                        default=False)
+    parser.add_argument("--disable-cloudwatch", action="store_true", required=False,
                         help="Disable uploading log events to CloudWatch",
-                        default=False, required=False)
-    parser.add_argument("--cloudwatch-log-group", type=str,
+                        default=False)
+    parser.add_argument("--management-cert", type=str, required=False,
+                        help="Path of the management certificate file",
+                        default="/opt/xxnetwork/cred/network-management.crt")
+    parser.add_argument("--tmp-dir", type=str, required=False,
+                        help="Directory for placing temporary files",
+                        default="/tmp")
+    parser.add_argument("--cmd-dir", type=str, required=False,
+                        help="Directory used for saving command file history",
+                        default="/opt/xxnetwork/log/cmd")
+    parser.add_argument("--wrapper-log", type=str, required=False,
+                        help="Path of the wrapper script log file",
+                        default="/opt/xxnetwork/log/wrapper.log")
+
+    # cMix/Gateway arguments
+    parser.add_argument("--binary-path", type=str, required=True,
+                        help="Path of the cMix/Gateway binary")
+    parser.add_argument("--config-path", type=str, required=True,
+                        help="Path of the cMix/Gateway config file")
+    parser.add_argument("--log-path", type=str, required=False,
+                        help="Path of the cMix/Gateway log file",
+                        default="/opt/xxnetwork/log/xx.log")
+    parser.add_argument("--gpu-lib", type=str, required=False,
+                        help="Path of the GPU exponentiation library",
+                        default="/opt/xxnetwork/lib/libpowmosm75.so")
+    parser.add_argument("--gpu-bin", type=str, required=False,
+                        help="Path of the GPU bin file",
+                        default="/opt/xxnetwork/lib/libpow.fatbin")
+    parser.add_argument("--id-path", type=str, required=False,
+                        help="Path of the cMix/Gateway ID file",
+                        default="/opt/xxnetwork/cred/IDF.json")
+    parser.add_argument("--err-path", type=str, required=False,
+                        help="Path of the cMix error recovery file",
+                        default="/opt/xxnetwork/logs/cmix-err.log")
+    parser.add_argument("--cloudwatch-log-group", type=str, required=False,
                         help="Log group for CloudWatch logging",
-                        default="xxnetwork-logs-prod")
-    parser.add_argument("--s3accesskey", type=str, required=True,
-                        help="s3 access key")
-    parser.add_argument("--s3secret", type=str, required=True,
-                        help="s3 access key secret")
-    parser.add_argument("--s3region", type=str, required=True,
-                        help="s3 region")
-    parser.add_argument("--tmpdir", type=str, required=False,
-                        help="directory for temp files", default="/tmp")
-    parser.add_argument("--cmdlogdir", type=str, required=False,
-                        help="directory for commands log", default="/opt/xxnetwork/cmdlog")
-    parser.add_argument("--erroutputpath", type=str, required=False,
-                        help="Path to recovered error path", default=None)
-    parser.add_argument("--configoverride", type=str, required=False,
-                        help="Override for config file path", default="")
+                        default="xxnetwork-logs-mainnet")
+
+    # Consensus arguments
+    parser.add_argument("--disable-consensus", action="store_true", required=False,
+                        help="Disable Consensus integration (For test environments only)",
+                        default=False)
+    parser.add_argument("--consensus-log", type=str, required=False,
+                        help="Path of the Consensus log file",
+                        default="/opt/xxnetwork/log/chain.log")
+    parser.add_argument("--consensus-cw-group", type=str, required=False,
+                        help="Log group for Consensus CloudWatch logging",
+                        default="xxnetwork-consensus-mainnet")
+    parser.add_argument("--consensus-url", type=str, required=False,
+                        help="Listening address for blockchain-provided binary updates",
+                        default="ws://localhost:63007")
 
     args, unknown = parser.parse_known_args()
+    args = vars(args)
+
+    # Configure logger
+    log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
+                    level=log.DEBUG if args["verbose"] else log.INFO,
+                    datefmt='%d-%b-%y %H:%M:%S',
+                    filename=args["wrapper_log"])
 
     # Handle unknown args
     if len(unknown) > 0:
         log.warning("Unknown arguments: {}".format(unknown))
-    return vars(args)
+    return args
 
 
 # TARGET CLASS -----------------------------------------------------------------
@@ -590,8 +782,6 @@ class Targets:
     GPUBIN = 'fatbin'
     WRAPPER = 'wrapper'
     CERT = 'cert'
-    CONSENSUS_BINARY = 'consensus_binary'
-    CONSENSUS_STATE = 'consensus_state'
     LOGGER = 'logger'
 
 
@@ -599,57 +789,37 @@ class Targets:
 
 
 def main():
-    # Configure logger
-    log.basicConfig(format='[%(levelname)s] %(asctime)s: %(message)s',
-                    level=log.INFO, datefmt='%d-%b-%y %H:%M:%S')
-
     # Command line arguments
     args = get_args()
     log.info("Running with configuration: {}".format(args))
 
-    binary_path = args["binary"]
-    gpulib_path = args["gpulib"]
-    gpubin_path = args["gpubin"]
-    management_directory = args["s3path"]
-
-    # Hardcoded variables
-    rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"], "creds",
-                                                           "network_management.crt"))
-    if not os.path.exists(rsa_certificate_path):  # check creds dir for file as well
-        rsa_certificate_path = os.path.expanduser(os.path.join(args["configdir"],
-                                                               "network_management.crt"))
-
-    s3_management_bucket_name = args["s3managementbucket"]
-    s3_access_key_id = args["s3accesskey"]
-    s3_access_key_secret = args["s3secret"]
-    s3_bucket_region = args["s3region"]
-    log_path = args["logpath"]
-    os.makedirs(os.path.dirname(args["logpath"]), exist_ok=True)
-
-    err_output_path = args["erroutputpath"]
+    binary_path = args["binary_path"]
+    gpulib_path = args["gpu_lib"]
+    gpubin_path = args["gpu_bin"]
+    is_gateway = args["gateway"]
+    management_directory = "gateway" if is_gateway else "server"
+    rsa_certificate_path = args["management_cert"]
+    s3_management_bucket_name = args["s3_management_bucket"]
+    s3_bin_bucket_name = args["s3_bin_bucket"]
+    s3_access_key_id = args["s3_access_key"]
+    s3_access_key_secret = args["s3_secret"]
+    s3_bucket_region = args["s3_region"]
+    log_path = args["log_path"]
+    wrapper_log_path = args["wrapper_log"]
+    err_output_path = args["err_path"]
+    id_path = args["id_path"]
     version_file = management_directory + "/version.jsonl"
     command_file = management_directory + "/command.jsonl"
-    tmp_dir = args["tmpdir"]
+    tmp_dir = args["tmp_dir"]
     os.makedirs(tmp_dir, exist_ok=True)
-    remotes_paths = [version_file, command_file]
-    cmd_log_dir = args["cmdlogdir"]
-
+    cmd_log_dir = args["cmd_dir"]
+    log_grp = args["cloudwatch_log_group"]
     consensus_log = args["consensus_log"]
     consensus_grp = args["consensus_cw_group"]
-    consensus_config = args["consensus_config"]
-
-    # Config file is the binaryname.yaml inside the config directory
-    config_file = os.path.expanduser(os.path.join(
-        args["configdir"], os.path.basename(binary_path) + ".yaml"))
-    config_override = os.path.abspath(args["configoverride"])
-    if os.path.isfile(config_override):
-        config_file = config_override
-    elif not os.path.isfile(config_file):
-        config_file = os.path.expanduser(os.path.join(args["configdir"],
-                                                      os.path.basename(binary_path).replace("xxnetwork-", "") + ".yaml"))
-        if not os.path.isfile(config_file):
-            log.error("Unable to locate config file at {}. "
-                      "Please specify the correct path using --configoverride".format(config_file))
+    consensus_url = args["consensus_url"]
+    config_file = args["config_path"]
+    disable_consensus = args["disable_consensus"]
+    disable_cloudwatch = args["disable_cloudwatch"]
 
     # The valid "install" paths we can write to, with their local paths for
     # this machine
@@ -659,8 +829,6 @@ def main():
         Targets.GPUBIN: os.path.abspath(os.path.expanduser(gpubin_path)),
         Targets.WRAPPER: os.path.abspath(sys.argv[0]),
         Targets.CERT: rsa_certificate_path,
-        Targets.CONSENSUS_BINARY: args["consensus_binary"],
-        Targets.CONSENSUS_STATE: args["consensus_state"]
     }
 
     # Record the most recent command timestamp
@@ -668,33 +836,178 @@ def main():
     timestamps = [0, time.time()]
     # Record the most recent error timestamp to avoid restart loops
     last_error_timestamp = 0
+    # Frequency (in seconds) of checking for new commands
+    command_frequency = 10
 
     # Globally keep track of the main process being wrapped
     process = None
-    # Globally keep track of the consensus process
-    consensus_process = None
-    # Globally keep track of the logging process
+    # Globally keep track of the Elixxir logging process
     logging_process = None
+    # Globally keep track of the wrapper logging process
+    wrapper_logging_process = None
     # Globally keep track of the consensus logging process
     consensus_logging_process = None
+    # Globally keep track of the substrate connection
+    substrate = None
+    # Keep track of current binary hashes for blockchain updates
+    current_hashes = dict()
+
+    if disable_consensus:
+        # Record the most recent command timestamp to avoid executing duplicate commands
+        timestamps = [0, time.time()]
+        remotes_paths = [version_file, command_file]
+    else:
+        # Consensus-specific initialization code
+        timestamps = [time.time()]
+        remotes_paths = [command_file]
+
+        # Obtain the current wrapper hash in order to prevent update loop
+        wrapper_bytes = bytes(open(valid_paths[Targets.WRAPPER], 'rb').read())
+        current_hashes[Targets.WRAPPER] = hashlib.blake2s(wrapper_bytes).hexdigest()
+
+        # Node-specific consensus initialization code
+        if not is_gateway:
+            # Wait for the Node ID file to exist before entering the main loop
+            log.info("Waiting on IDF for consensus...")
+            while read_cmix_id(id_path) is None:
+                time.sleep(command_frequency)
+
+            # Wait for the node to stake before entering the main loop
+            substrate = get_substrate_provider(consensus_url)
+            log.info("Waiting on consensus ready state...")
+            while True:
+                while substrate is None:
+                    time.sleep(command_frequency)
+                    substrate = get_substrate_provider(consensus_url)
+                if poll_ready(substrate):
+                    log.info("Consensus ready!")
+                    break
+                time.sleep(command_frequency)
 
     # CONTROL FLOW -----------------------------------------------------------------
 
-    # Start the log backup service
-    if not args["disable_cloudwatch"]:
-        logging_process = start_cw_logger(args["cloudwatch_log_group"], log_path,
-                                          args["idpath"], s3_bucket_region,
+    # Start the various log backup threads
+    if not disable_cloudwatch:
+        logging_process = start_cw_logger(log_grp, log_path,
+                                          id_path, s3_bucket_region,
                                           s3_access_key_id, s3_access_key_secret)
-        if not args["disable_consensus"] and management_directory == "server":
-            consensus_logging_process = start_cw_logger(consensus_grp, consensus_log, args["idpath"], s3_bucket_region,
+        wrapper_logging_process = start_cw_logger(log_grp, wrapper_log_path,
+                                                  id_path, s3_bucket_region,
+                                                  s3_access_key_id, s3_access_key_secret)
+        if not disable_consensus and not is_gateway:
+            consensus_logging_process = start_cw_logger(consensus_grp, consensus_log,
+                                                        id_path, s3_bucket_region,
                                                         s3_access_key_id, s3_access_key_secret)
 
-    # Frequency (in seconds) of checking for new commands
-    command_frequency = 10
-    log.info("Script initialized at {}".format(time.time()))
     # Main command/control loop
+    log.info("Script initialized at {}".format(time.time()))
     while True:
         time.sleep(command_frequency)
+
+        # Handle updates from blockchain, if enabled
+        if not disable_consensus:
+            if substrate is None:
+                # Handle lost connections
+                substrate = get_substrate_provider(consensus_url)
+            else:
+                # Poll for hashes
+                hashes = poll_cmix_hashes(substrate)
+                if hashes is None:
+                    # Connection was lost
+                    substrate = None
+                elif not hashes:
+                    # No hashes available, currently syncing
+                    log.debug("Waiting for blockchain node to sync...")
+                else:
+                    try:
+                        # Check for wrapper updates
+                        new_hash = hashes[Targets.WRAPPER].replace("0x", "")
+                        current_hash = current_hashes.get(
+                            Targets.WRAPPER, "0000000000000000000000000000000000000000000000000000000000000000")
+                        if new_hash != current_hash:
+                            log.info("{} update required: {} -> {}".format(Targets.WRAPPER, current_hash, new_hash))
+                            # Get local destination path
+                            install_path = valid_paths[Targets.WRAPPER]
+                            # Get remote source path
+                            remote_path = "{}/{}".format(Targets.WRAPPER, new_hash)
+                            # Download file to temporary location
+                            tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                            download(remote_path, tmp_path,
+                                     s3_bin_bucket_name, s3_bucket_region,
+                                     s3_access_key_id, s3_access_key_secret)
+                            # Perform the update
+                            was_successful = update(Targets.WRAPPER, tmp_path, install_path, new_hash)
+                            if was_successful:
+                                current_hashes[Targets.WRAPPER] = new_hash
+
+                        if not is_gateway:
+                            # Check for GPU bin updates
+                            new_hash = hashes[Targets.GPUBIN].replace("0x", "")
+                            current_hash = current_hashes.get(
+                                Targets.GPUBIN, "0000000000000000000000000000000000000000000000000000000000000000")
+                            if new_hash != current_hash:
+                                log.info("{} update required: {} -> {}".format(Targets.GPUBIN, current_hash, new_hash))
+                                # Get local destination path
+                                install_path = valid_paths[Targets.GPUBIN]
+                                # Get remote source path
+                                remote_path = "{}/{}".format(Targets.GPUBIN, new_hash)
+                                # Download file to temporary location
+                                tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                                download(remote_path, tmp_path,
+                                         s3_bin_bucket_name, s3_bucket_region,
+                                         s3_access_key_id, s3_access_key_secret)
+                                # Perform the update
+                                was_successful = update(Targets.GPUBIN, tmp_path, install_path, new_hash)
+                                if was_successful:
+                                    current_hashes[Targets.GPUBIN] = new_hash
+
+                            # Check for GPU lib updates
+                            new_hash = hashes[Targets.GPULIB].replace("0x", "")
+                            current_hash = current_hashes.get(
+                                Targets.GPULIB, "0000000000000000000000000000000000000000000000000000000000000000")
+                            if new_hash != current_hash:
+                                log.info("{} update required: {} -> {}".format(Targets.GPULIB, current_hash, new_hash))
+                                # Get local destination path
+                                install_path = valid_paths[Targets.GPULIB]
+                                # Get remote source path
+                                remote_path = "{}/{}".format(Targets.GPULIB, new_hash)
+                                # Download file to temporary location
+                                tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                                download(remote_path, tmp_path,
+                                         s3_bin_bucket_name, s3_bucket_region,
+                                         s3_access_key_id, s3_access_key_secret)
+                                # Perform the update
+                                was_successful = update(Targets.GPULIB, tmp_path, install_path, new_hash)
+                                if was_successful:
+                                    current_hashes[Targets.GPULIB] = new_hash
+
+                        # Check for binary updates
+                        new_hash = hashes[management_directory].replace("0x", "")
+                        current_hash = current_hashes.get(
+                            management_directory, "0000000000000000000000000000000000000000000000000000000000000000")
+                        if new_hash != current_hash:
+                            log.info("{} update required: {} -> {}".format(management_directory, current_hash, new_hash))
+                            # Stop the process
+                            terminate_process(process)
+                            # Get local destination path
+                            install_path = valid_paths[Targets.BINARY]
+                            # Get remote source path
+                            remote_path = "{}/{}".format(management_directory, new_hash)
+                            # Download file to temporary location
+                            tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                            download(remote_path, tmp_path,
+                                     s3_bin_bucket_name, s3_bucket_region,
+                                     s3_access_key_id, s3_access_key_secret)
+                            # Perform the update
+                            was_successful = update(Targets.BINARY, tmp_path, install_path, new_hash)
+                            if was_successful:
+                                current_hashes[management_directory] = new_hash
+                                # Restart the process
+                                process = start_binary(valid_paths[Targets.BINARY], log_path,
+                                                       ["--config", config_file])
+                    except Exception as err:
+                        log.error("Unable to execute blockchain update: {}".format(err),
+                                  exc_info=True)
 
         # If there is a (recently modified) recovered error file present, restart the main process
         if err_output_path \
@@ -751,15 +1064,14 @@ def main():
                               "ignoring...".format(timestamp))
                     continue
 
-                # Note: We get the UUID for every valid command in case it changes
-                node_id = get_node_id(args["idpath"])
-
                 # Execute the commands in sequence
                 for command in signed_commands.get("commands", list()):
 
                     # If the command does not apply to us, note that and move on
                     if "nodes" in command:
                         node_targets = command.get("nodes", list())
+                        # Note: We get the ID for every valid command in case it changes
+                        node_id = read_cmix_id(id_path)
                         if node_targets and node_id not in node_targets:
                             log.info("Command does not apply to {}".format(node_id))
                             timestamps[i] = timestamp
@@ -785,21 +1097,19 @@ def main():
                         if target == Targets.BINARY and (process is None or process.poll() is not None):
                             process = start_binary(valid_paths[Targets.BINARY], log_path,
                                                    ["--config", config_file])
-                        elif not args["disable_consensus"] and target == Targets.CONSENSUS_BINARY and \
-                                (consensus_process is None or consensus_process.poll() is not None):
-                            consensus_process = start_binary(valid_paths[Targets.CONSENSUS_BINARY], consensus_log,
-                                                             ["--config", consensus_config,
-                                                              "--cmixconfig", config_file])
                         elif target == Targets.LOGGER:
-                            if not args["disable_cloudwatch"] \
+                            if not disable_cloudwatch \
                                     and (logging_process is None or not logging_process.is_alive()):
-                                logging_process = start_cw_logger(args["cloudwatch_log_group"], log_path,
-                                                                  args["idpath"], s3_bucket_region,
+                                logging_process = start_cw_logger(log_grp, log_path,
+                                                                  id_path, s3_bucket_region,
                                                                   s3_access_key_id, s3_access_key_secret)
-                            if not args["disable_consensus"] and management_directory == "server" \
+                                wrapper_logging_process = start_cw_logger(log_grp, wrapper_log_path,
+                                                                          id_path, s3_bucket_region,
+                                                                          s3_access_key_id, s3_access_key_secret)
+                            if not disable_consensus and not is_gateway \
                                     and (consensus_logging_process is None or not consensus_logging_process.is_alive()):
                                 consensus_logging_process = start_cw_logger(consensus_grp, consensus_log,
-                                                                            args["idpath"], s3_bucket_region,
+                                                                            id_path, s3_bucket_region,
                                                                             s3_access_key_id, s3_access_key_secret)
 
                     # STOP COMMAND ===========================
@@ -807,10 +1117,9 @@ def main():
                         # Stop the wrapped process
                         if target == Targets.BINARY:
                             terminate_process(process)
-                        elif target == Targets.CONSENSUS_BINARY:
-                            terminate_process(consensus_process)
                         elif target == Targets.LOGGER:
                             terminate_multiprocess(logging_process)
+                            terminate_multiprocess(wrapper_logging_process)
                             terminate_multiprocess(consensus_logging_process)
 
                     # DELAY COMMAND ===========================
@@ -824,16 +1133,9 @@ def main():
                     # UPDATE COMMAND ===========================
                     elif command_type == "update":
 
-                        # Handle disabled updates flag
-                        if args["disableupdates"]:
-                            log.error("Update command ignored, updates disabled!")
-                            timestamps[i] = timestamp
-                            continue
-
-                        # Handle disabled consensus flag
-                        if (target == Targets.CONSENSUS_BINARY or target == Targets.CONSENSUS_STATE) \
-                                and args["disable_consensus"]:
-                            log.error("Update command ignored, consensus disabled!")
+                        # Skip updates of this kind when consensus is enabled
+                        if not disable_consensus:
+                            log.error("Update command ignored, consensus enabled!")
                             timestamps[i] = timestamp
                             continue
 
@@ -847,68 +1149,18 @@ def main():
                         # Get local destination path
                         install_path = valid_paths[target]
                         # Get remote source path
-                        update_path = "{}/{}".format(management_directory, info.get("path", ""))
-                        log.info("Downloading file at {} to {}...".format(update_path, install_path))
-
-                        # Make directories and download file to temporary location
-                        os.makedirs(os.path.dirname(install_path), exist_ok=True)
-                        tmp_path = install_path + ".tmp"
-                        download(update_path, tmp_path,
+                        remote_path = "{}/{}".format(management_directory, info.get("path", ""))
+                        # Download file to temporary location
+                        tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
+                        download(remote_path, tmp_path,
                                  s3_management_bucket_name, s3_bucket_region,
                                  s3_access_key_id, s3_access_key_secret)
 
-                        # Ensure the hash of the downloaded file matches the hash in the command
-                        update_bytes = bytes(open(tmp_path, 'rb').read())
-                        actual_hash = hashlib.blake2s(update_bytes).hexdigest()
-                        expected_hash = info.get("hash", "")
-                        if actual_hash != expected_hash:
-                            os.remove(path=tmp_path)
-                            log.error("Downloaded file {} does not match provided hash. Expected {}, got {}".format(
-                                tmp_path, expected_hash, actual_hash))
+                        # Perform the update
+                        was_successful = update(target, tmp_path, install_path, info.get("hash", ""))
+                        if not was_successful:
                             timestamps[i] = timestamp
                             continue
-
-                        # Move the downloaded file into place, overwriting anything that's there
-                        try:
-                            os.replace(tmp_path, install_path)
-                        except Exception as err:
-                            log.error("Could not overwrite {} with {}: {}".format(
-                                install_path, tmp_path, err))
-                            timestamps[i] = timestamp
-                            continue
-
-                        # Handle binary updates
-                        if target == Targets.BINARY or target == Targets.CONSENSUS_BINARY:
-                            os.chmod(install_path, stat.S_IEXEC)
-
-                        # Handle GPU library updates
-                        if target == Targets.GPULIB or target == Targets.GPUBIN:
-                            os.chmod(install_path, stat.S_IREAD)
-
-                        # Handle consensus state updates
-                        if target == Targets.CONSENSUS_STATE:
-                            os.chmod(install_path, stat.S_IREAD)
-
-                            # Assemble the path to extract the new consensus directory
-                            extract_path = os.path.dirname(install_path)
-                            # Assemble the path to the extracted consensus directory
-                            dest_path = os.path.join(extract_path, 'consensus')
-
-                            # Remove existing state directory
-                            try:
-                                shutil.rmtree(dest_path)
-                            except OSError as e:
-                                log.error("Unable to remove {}: {}".format(dest_path, e))
-
-                            # Extract the tarball
-                            with tarfile.open(install_path) as tarball:
-                                tarball.extractall(path=extract_path)
-
-                        # Handle wrapper updates
-                        if target == Targets.WRAPPER:
-                            os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
-                            log.info("Wrapper script updated, exiting now...")
-                            os._exit(0)
 
                     log.info("Completed command: {}".format(command))
 
