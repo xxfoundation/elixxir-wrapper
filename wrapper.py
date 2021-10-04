@@ -117,6 +117,8 @@ def poll_ready(substrate):
         log.error("Connection lost while in \'substrate.query(\"Session\", \"DisabledValidators\")\'. Error: %s" % e)
         return
 
+    # Bc we use pop to remove disabled, go backwards through this list. Otherwise, popping early index shifts later ones
+    disabled_set.value.reverse()
     for val in disabled_set.value:
         validator_set.value.pop(val)
 
