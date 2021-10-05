@@ -15,6 +15,7 @@ import base64
 import json
 import logging as log
 import os
+import random
 import stat
 import subprocess
 import sys
@@ -220,7 +221,8 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     # Constants
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
-    push_frequency = 3  # frequency of pushes to cloudwatch, in seconds
+    push_frequency = 30  # frequency of pushes to cloudwatch, in seconds
+    jitter_frequency = push_frequency + (random.randint(-1000, 1000) / 1000)
     max_send_size = megabyte
 
     # Event buffer and storage
@@ -243,9 +245,10 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
         # Check if we should send events to cloudwatch
         log_event_size = 26
         is_over_max_size = len(event_buffer.encode(encoding='utf-8')) + log_event_size + events_size > max_send_size
-        is_time_to_push = time.time() - last_push_time > push_frequency
+        is_time_to_push = time.time() - last_push_time > jitter_frequency
 
         if (is_over_max_size or is_time_to_push) and len(log_events) > 0:
+            jitter_frequency = push_frequency + (random.randint(-1000, 1000) / 1000)
             # Send to cloudwatch, then reset events, size and push time
             upload_sequence_token, ok = send(client, upload_sequence_token,
                                              log_events, log_stream_name, cloudwatch_log_group)
