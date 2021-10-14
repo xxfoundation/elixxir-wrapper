@@ -547,11 +547,6 @@ def start_binary(bin_path, log_file_path, bin_args):
     :return: Newly-created subprocess
     :rtype: subprocess.Popen
     """
-    # Ensure network settings are properly configured before allowing a start
-    if not check_networking():
-        raise Exception("Unacceptable network settings, refusing to start. "
-                        "Run the suggested commands and restart the wrapper service.")
-    # Open the process and return it
     with open(log_file_path, "a") as err_out:
         p = subprocess.Popen([bin_path] + bin_args,
                              stdout=subprocess.DEVNULL,
@@ -832,6 +827,11 @@ def main():
     disable_consensus = args["disable_consensus"]
     disable_cloudwatch = args["disable_cloudwatch"]
 
+    # Ensure network settings are properly configured before allowing a start
+    if not check_networking():
+        raise Exception("Unacceptable network settings, refusing to start. "
+                  "Run the suggested commands and restart the wrapper service.")
+
     # The valid "install" paths we can write to, with their local paths for
     # this machine
     valid_paths = {
@@ -1009,10 +1009,10 @@ def main():
                             # Perform the update
                             was_successful = update(Targets.BINARY, tmp_path, install_path, new_hash)
                             if was_successful:
+                                current_hashes[management_directory] = new_hash
                                 # Restart the process
                                 process = start_binary(valid_paths[Targets.BINARY], log_path,
                                                        ["--config", config_file])
-                                current_hashes[management_directory] = new_hash
                     except Exception as err:
                         log.error("Unable to execute blockchain update: {}".format(err),
                                   exc_info=True)
