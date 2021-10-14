@@ -29,13 +29,12 @@ from OpenSSL import crypto
 from substrateinterface import SubstrateInterface
 import hashlib
 
-
 ########################################################################################################################
 # Blockchain Updates
 ########################################################################################################################
 
 # Static variable detailing the Blockchain interface
-json_data="{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"struct\", \"type_mapping\": [[\"commission\", \"Compact<Perbill>\"], [\"blocked\", \"bool\"], [\"cmix_root\", \"Hash\"]]}, \"cmix::SoftwareHashes<Hash>\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
+json_data = "{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"struct\", \"type_mapping\": [[\"commission\", \"Compact<Perbill>\"], [\"blocked\", \"bool\"], [\"cmix_root\", \"Hash\"]]}, \"cmix::SoftwareHashes<Hash>\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
 
 
 def get_substrate_provider(consensus_url):
@@ -145,7 +144,8 @@ def poll_ready(substrate):
                 params=[era, val]
             )
         except Exception as e:
-            log.error(f"Connection lost while in \'substrate.query(\"Staking\", \"ErasValidatorPrefs\", [{era}, {val}])\'. Error: %s" % e)
+            log.error(
+                f"Connection lost while in \'substrate.query(\"Staking\", \"ErasValidatorPrefs\", [{era}, {val}])\'. Error: %s" % e)
             return
 
         cmix_root = data.value['cmix_root']
@@ -366,7 +366,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
 
     if line:
         if len(line.encode(encoding='utf-8')) > maximum_event_size:
-            line = line[:maximum_event_size-1]
+            line = line[:maximum_event_size - 1]
         # Push line on to the buffer
         event_buffer += line
 
@@ -830,7 +830,7 @@ def main():
     # Ensure network settings are properly configured before allowing a start
     if not check_networking():
         raise Exception("Unacceptable network settings, refusing to start. "
-                  "Run the suggested commands and restart the wrapper service.")
+                        "Run the suggested commands and restart the wrapper service.")
 
     # The valid "install" paths we can write to, with their local paths for
     # this machine
@@ -994,7 +994,8 @@ def main():
                         current_hash = current_hashes.get(
                             management_directory, "0000000000000000000000000000000000000000000000000000000000000000")
                         if new_hash != current_hash:
-                            log.info("{} update required: {} -> {}".format(management_directory, current_hash, new_hash))
+                            log.info(
+                                "{} update required: {} -> {}".format(management_directory, current_hash, new_hash))
                             # Stop the process
                             terminate_process(process)
                             # Get local destination path
