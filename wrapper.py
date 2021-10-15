@@ -795,8 +795,15 @@ class Targets:
 
 
 def main():
-    # Command line arguments
     args = get_args()
+
+    # Ensure network settings are properly configured before allowing a start
+    if not check_networking():
+        log.error("Unacceptable network settings, refusing to start. "
+                  "Run the suggested commands and restart the wrapper service.")
+        raise Exception
+
+    # Command line arguments
     log.info("Running with configuration: {}".format(args))
 
     binary_path = args["binary_path"]
@@ -826,11 +833,6 @@ def main():
     config_file = args["config_path"]
     disable_consensus = args["disable_consensus"]
     disable_cloudwatch = args["disable_cloudwatch"]
-
-    # Ensure network settings are properly configured before allowing a start
-    if not check_networking():
-        raise Exception("Unacceptable network settings, refusing to start. "
-                        "Run the suggested commands and restart the wrapper service.")
 
     # The valid "install" paths we can write to, with their local paths for
     # this machine
