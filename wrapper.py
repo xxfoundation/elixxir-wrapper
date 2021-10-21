@@ -15,6 +15,7 @@ import base64
 import json
 import logging as log
 import os
+import random
 import stat
 import subprocess
 import sys
@@ -28,13 +29,12 @@ from OpenSSL import crypto
 from substrateinterface import SubstrateInterface
 import hashlib
 
-
 ########################################################################################################################
 # Blockchain Updates
 ########################################################################################################################
 
 # Static variable detailing the Blockchain interface
-json_data="{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"struct\", \"type_mapping\": [[\"commission\", \"Compact<Perbill>\"], [\"blocked\", \"bool\"], [\"cmix_root\", \"Hash\"]]}, \"cmix::SoftwareHashes<Hash>\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
+json_data = "{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"struct\", \"type_mapping\": [[\"commission\", \"Compact<Perbill>\"], [\"blocked\", \"bool\"], [\"cmix_root\", \"Hash\"]]}, \"cmix::SoftwareHashes<Hash>\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
 
 
 def get_substrate_provider(consensus_url):
@@ -117,6 +117,8 @@ def poll_ready(substrate):
         log.error("Connection lost while in \'substrate.query(\"Session\", \"DisabledValidators\")\'. Error: %s" % e)
         return
 
+    # Bc we use pop to remove disabled, go backwards through this list. Otherwise, popping early index shifts later ones
+    disabled_set.value.reverse()
     for val in disabled_set.value:
         validator_set.value.pop(val)
 
@@ -142,7 +144,8 @@ def poll_ready(substrate):
                 params=[era, val]
             )
         except Exception as e:
-            log.error(f"Connection lost while in \'substrate.query(\"Staking\", \"ErasValidatorPrefs\", [{era}, {val}])\'. Error: %s" % e)
+            log.error(
+                f"Connection lost while in \'substrate.query(\"Staking\", \"ErasValidatorPrefs\", [{era}, {val}])\'. Error: %s" % e)
             return
 
         cmix_root = data.value['cmix_root']
@@ -218,7 +221,9 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     # Constants
     megabyte = 1048576  # Size of one megabyte in bytes
     max_size = 100 * megabyte  # Maximum log file size before truncation
-    push_frequency = 3  # frequency of pushes to cloudwatch, in seconds
+    push_frequency = 30  # frequency of pushes to cloudwatch, in seconds
+    jitter_size = 1000  # Variable time (in ms) for log push jitter
+    jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
     max_send_size = megabyte
 
     # Event buffer and storage
@@ -241,9 +246,10 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
         # Check if we should send events to cloudwatch
         log_event_size = 26
         is_over_max_size = len(event_buffer.encode(encoding='utf-8')) + log_event_size + events_size > max_send_size
-        is_time_to_push = time.time() - last_push_time > push_frequency
+        is_time_to_push = time.time() - last_push_time > jitter_frequency
 
         if (is_over_max_size or is_time_to_push) and len(log_events) > 0:
+            jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
             # Send to cloudwatch, then reset events, size and push time
             upload_sequence_token, ok = send(client, upload_sequence_token,
                                              log_events, log_stream_name, cloudwatch_log_group)
@@ -360,7 +366,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
 
     if line:
         if len(line.encode(encoding='utf-8')) > maximum_event_size:
-            line = line[:maximum_event_size-1]
+            line = line[:maximum_event_size - 1]
         # Push line on to the buffer
         event_buffer += line
 
@@ -789,8 +795,15 @@ class Targets:
 
 
 def main():
-    # Command line arguments
     args = get_args()
+
+    # Ensure network settings are properly configured before allowing a start
+    if not check_networking():
+        log.error("Unacceptable network settings, refusing to start. "
+                  "Run the suggested commands and restart the wrapper service.")
+        raise Exception
+
+    # Command line arguments
     log.info("Running with configuration: {}".format(args))
 
     binary_path = args["binary_path"]
@@ -831,9 +844,6 @@ def main():
         Targets.CERT: rsa_certificate_path,
     }
 
-    # Record the most recent command timestamp
-    # to avoid executing duplicate commands
-    timestamps = [0, time.time()]
     # Record the most recent error timestamp to avoid restart loops
     last_error_timestamp = 0
     # Frequency (in seconds) of checking for new commands
@@ -986,7 +996,8 @@ def main():
                         current_hash = current_hashes.get(
                             management_directory, "0000000000000000000000000000000000000000000000000000000000000000")
                         if new_hash != current_hash:
-                            log.info("{} update required: {} -> {}".format(management_directory, current_hash, new_hash))
+                            log.info(
+                                "{} update required: {} -> {}".format(management_directory, current_hash, new_hash))
                             # Stop the process
                             terminate_process(process)
                             # Get local destination path
@@ -1085,14 +1096,6 @@ def main():
 
                     # START COMMAND ===========================
                     if command_type == "start":
-
-                        # Ensure network settings are properly configured before allowing a start
-                        if not check_networking():
-                            log.error("Unacceptable network settings, refusing to start. "
-                                      "Run the suggested commands")
-                            timestamps[i] = timestamp
-                            continue
-
                         # Decide which type of binary to start
                         if target == Targets.BINARY and (process is None or process.poll() is not None):
                             process = start_binary(valid_paths[Targets.BINARY], log_path,
