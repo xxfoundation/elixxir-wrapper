@@ -225,6 +225,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     jitter_size = 1000  # Variable time (in ms) for log push jitter
     jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
     max_send_size = megabyte
+    max_events = 10000
 
     # Event buffer and storage
     event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
@@ -246,9 +247,10 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
         # Check if we should send events to cloudwatch
         log_event_size = 26
         is_over_max_size = len(event_buffer.encode(encoding='utf-8')) + log_event_size + events_size > max_send_size
+        is_over_max_events = len(log_events) >= max_events
         is_time_to_push = time.time() - last_push_time > jitter_frequency
 
-        if (is_over_max_size or is_time_to_push) and len(log_events) > 0:
+        if (is_over_max_size or is_over_max_events or is_time_to_push) and len(log_events) > 0:
             jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
             # Send to cloudwatch, then reset events, size and push time
             upload_sequence_token, ok = send(client, upload_sequence_token,
