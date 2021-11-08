@@ -33,9 +33,6 @@ import hashlib
 # Blockchain Updates
 ########################################################################################################################
 
-# Static variable detailing the Blockchain interface
-json_data = "{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"struct\", \"type_mapping\": [[\"commission\", \"Compact<Perbill>\"], [\"blocked\", \"bool\"], [\"cmix_root\", \"Hash\"]]}, \"cmix::SoftwareHashes<Hash>\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
-
 
 def get_substrate_provider(consensus_url):
     """
@@ -45,11 +42,7 @@ def get_substrate_provider(consensus_url):
     :return: Substrate Network Provider used to query blockchain
     """
     try:
-        return SubstrateInterface(
-            url=consensus_url,
-            type_registry_preset='substrate-node-template',
-            type_registry=json.loads(json_data)
-        )
+        return SubstrateInterface(url=consensus_url)
     except ConnectionRefusedError:
         log.error("No local Substrate node running.")
         return None
