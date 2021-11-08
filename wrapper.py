@@ -115,33 +115,23 @@ def poll_ready(substrate):
     for val in disabled_set.value:
         validator_set.value.pop(val)
 
-    try:
-        active_era = substrate.query(
-            module='Staking',
-            storage_function='ActiveEra',
-            params=[]
-        )
-    except Exception as e:
-        log.error("Connection lost while in \'substrate.query(\"Staking\", \"ActiveEra\")\'. Error: %s" % e)
-        return
-
-    era = active_era.value['index']
-    log.debug(f"Era = {era}")
-
     found = False
     for val in validator_set.value:
         try:
-            data = substrate.query(
-                module='Staking',
-                storage_function='ErasValidatorPrefs',
-                params=[era, val]
-            )
+            data = substrate.query("Staking", "Bonded", [val])
         except Exception as e:
-            log.error(
-                f"Connection lost while in \'substrate.query(\"Staking\", \"ErasValidatorPrefs\", [{era}, {val}])\'. Error: %s" % e)
-            return
+            log.error(f"Failed to query Staking Bonded: {val}")
+            raise e
+        controller = data.value
 
-        cmix_root = data.value['cmix_root']
+        try:
+            data = substrate.query("Staking", "Ledger", [controller])
+        except Exception as e:
+            log.error(f"Failed to query Staking Ledger: {controller}")
+            raise e
+        ledger = data.value
+
+        cmix_root = ledger['cmix_id']
         if cmix_root == hex_id:
             log.debug("Node found in active validator set: " + val)
             found = True
