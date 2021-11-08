@@ -120,15 +120,15 @@ def poll_ready(substrate):
         try:
             data = substrate.query("Staking", "Bonded", [val])
         except Exception as e:
-            log.error(f"Failed to query Staking Bonded: {val}")
-            raise e
+            log.error(f"Failed to query Staking Bonded {val}: {e}")
+            return
         controller = data.value
 
         try:
             data = substrate.query("Staking", "Ledger", [controller])
         except Exception as e:
-            log.error(f"Failed to query Staking Ledger: {controller}")
-            raise e
+            log.error(f"Failed to query Staking Ledger {controller}: {e}")
+            return
         ledger = data.value
 
         cmix_root = ledger['cmix_id']
