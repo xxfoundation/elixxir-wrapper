@@ -33,9 +33,6 @@ import hashlib
 # Blockchain Updates
 ########################################################################################################################
 
-# Static variable detailing the Blockchain interface
-json_data = "{\"runtime_id\": 1, \"types\": {\"ValidatorPrefs\": {\"type\": \"struct\", \"type_mapping\": [[\"commission\", \"Compact<Perbill>\"], [\"blocked\", \"bool\"], [\"cmix_root\", \"Hash\"]]}, \"cmix::SoftwareHashes<Hash>\": {\"type\": \"struct\", \"type_mapping\": [[\"server\", \"Hash\"], [\"fatbin\", \"Hash\"], [\"libpow\", \"Hash\"], [\"gateway\", \"Hash\"], [\"scheduling\", \"Hash\"], [\"wrapper\", \"Hash\"], [\"udb\", \"Hash\"], [\"notifications\", \"Hash\"], [\"extra\", \"Option<Vec<Hash>>\"]]}}}"
-
 
 def get_substrate_provider(consensus_url):
     """
@@ -45,11 +42,7 @@ def get_substrate_provider(consensus_url):
     :return: Substrate Network Provider used to query blockchain
     """
     try:
-        return SubstrateInterface(
-            url=consensus_url,
-            type_registry_preset='substrate-node-template',
-            type_registry=json.loads(json_data)
-        )
+        return SubstrateInterface(url=consensus_url)
     except ConnectionRefusedError:
         log.error("No local Substrate node running.")
         return None
@@ -122,33 +115,23 @@ def poll_ready(substrate):
     for val in disabled_set.value:
         validator_set.value.pop(val)
 
-    try:
-        active_era = substrate.query(
-            module='Staking',
-            storage_function='ActiveEra',
-            params=[]
-        )
-    except Exception as e:
-        log.error("Connection lost while in \'substrate.query(\"Staking\", \"ActiveEra\")\'. Error: %s" % e)
-        return
-
-    era = active_era.value['index']
-    log.debug(f"Era = {era}")
-
     found = False
     for val in validator_set.value:
         try:
-            data = substrate.query(
-                module='Staking',
-                storage_function='ErasValidatorPrefs',
-                params=[era, val]
-            )
+            data = substrate.query("Staking", "Bonded", [val])
         except Exception as e:
-            log.error(
-                f"Connection lost while in \'substrate.query(\"Staking\", \"ErasValidatorPrefs\", [{era}, {val}])\'. Error: %s" % e)
+            log.error(f"Failed to query Staking Bonded {val}: {e}")
             return
+        controller = data.value
 
-        cmix_root = data.value['cmix_root']
+        try:
+            data = substrate.query("Staking", "Ledger", [controller])
+        except Exception as e:
+            log.error(f"Failed to query Staking Ledger {controller}: {e}")
+            return
+        ledger = data.value
+
+        cmix_root = ledger['cmix_id']
         if cmix_root == hex_id:
             log.debug("Node found in active validator set: " + val)
             found = True
@@ -225,6 +208,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     jitter_size = 1000  # Variable time (in ms) for log push jitter
     jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
     max_send_size = megabyte
+    max_events = 10000
 
     # Event buffer and storage
     event_buffer = ""  # Incomplete data not yet added to log_events for push to cloudwatch
@@ -246,9 +230,10 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
         # Check if we should send events to cloudwatch
         log_event_size = 26
         is_over_max_size = len(event_buffer.encode(encoding='utf-8')) + log_event_size + events_size > max_send_size
+        is_over_max_events = len(log_events) >= max_events
         is_time_to_push = time.time() - last_push_time > jitter_frequency
 
-        if (is_over_max_size or is_time_to_push) and len(log_events) > 0:
+        if (is_over_max_size or is_over_max_events or is_time_to_push) and len(log_events) > 0:
             jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
             # Send to cloudwatch, then reset events, size and push time
             upload_sequence_token, ok = send(client, upload_sequence_token,
