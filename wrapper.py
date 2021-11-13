@@ -79,7 +79,7 @@ def poll_cmix_hashes(substrate):
 
     try:
         cmix_hashes = substrate.query(
-            module='XXNetwork',
+            module='XXCmix',
             storage_function='CmixHashes',
             params=[]
         )
@@ -87,7 +87,7 @@ def poll_cmix_hashes(substrate):
         log.debug("cMix hashes: {}".format(result))
         return result
     except Exception as e:
-        log.error("Connection lost while in \'substrate.query(\"XXNetwork\", \"CmixHashes\")\'. Error: %s" % e)
+        log.error("Connection lost while in \'substrate.query(\"XXCmix\", \"CmixHashes\")\'. Error: %s" % e)
         return None
 
 
