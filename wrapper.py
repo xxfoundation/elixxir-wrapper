@@ -215,10 +215,11 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     log_events = []  # Buffer of events from log not yet sent to cloudwatch
     events_size = 0
 
-    log_file, client, log_stream_name, upload_sequence_token, init_err = init(log_file_path, id_path,
-                                                                              cloudwatch_log_group, log_file, client)
-    if init_err:
-        log.error("Failed to init cloudwatch logging for {}: {}".format(cloudwatch_log_group, init_err))
+    try:
+        log_file, client, log_stream_name, upload_sequence_token = init(log_file_path, id_path,
+                                                                        cloudwatch_log_group, log_file, client)
+    except Exception as e:
+        log.error("Failed to init cloudwatch logging for {}: {}".format(cloudwatch_log_group, e))
         return
 
     last_push_time = time.time()
@@ -236,8 +237,15 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
         if (is_over_max_size or is_over_max_events or is_time_to_push) and len(log_events) > 0:
             jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
             # Send to cloudwatch, then reset events, size and push time
-            upload_sequence_token, ok = send(client, upload_sequence_token,
-                                             log_events, log_stream_name, cloudwatch_log_group)
+            ok = False
+            try:
+                upload_sequence_token, ok = send(client, upload_sequence_token,
+                                                 log_events, log_stream_name, cloudwatch_log_group)
+            except Exception as e:
+                log.error(f"failed to upload cloudwatch logs: {e}")
+                log_file, client, log_stream_name, upload_sequence_token = init(log_file_path, id_path,
+                                                                                cloudwatch_log_group, log_file, client)
+
             if ok:
                 events_size = 0
                 log_events = []
@@ -300,9 +308,10 @@ def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
                     upload_sequence_token = s['uploadSequenceToken']
 
     except Exception as e:
-        return None, None, None, None, e
+        log.error(f"Failed to initialize logging: {e}")
+        raise e
 
-    return log_file, client, log_stream_name, upload_sequence_token, None
+    return log_file, client, log_stream_name, upload_sequence_token
 
 
 def process_line(log_file, event_buffer, log_events, events_size, last_line_time):
@@ -392,14 +401,17 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
 
     except client.exceptions.InvalidSequenceTokenException as e:
         ok = False
-        log.warning(f"Boto3 invalidSequenceTokenException encountered: {e}")
+        log.warning(f"Boto3 InvalidSequenceTokenException encountered using token {upload_sequence_token}: {e}")
         upload_sequence_token = e.response['Error']['Message'].split()[-1]
+        raise e
     except botocore.exceptions.ClientError as e:
         ok = False
         log.error("Boto3 client error encountered: %s" % e)
+        raise e
     except Exception as e:
         ok = False
         log.error(e)
+        raise e
     finally:
         # Always return upload sequence token - dropping this causes lots of errors
         return upload_sequence_token, ok
