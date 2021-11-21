@@ -1026,7 +1026,7 @@ def main():
         for i, remote_path in enumerate(remotes_paths):
             try:
                 # Obtain the latest command file
-                local_path = "{}/{}".format(tmp_dir, os.path.basename(remote_path))
+                local_path = os.path.join(tmp_dir, os.path.basename(remote_path))
                 download(remote_path, local_path,
                          s3_management_bucket_name, s3_bucket_region,
                          s3_access_key_id, s3_access_key_secret)
