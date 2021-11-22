@@ -105,15 +105,18 @@ def poll_ready(substrate):
         return
 
     try:
-        disabled_set = substrate.query("Session", "DisabledValidators")
+        offending_set = substrate.query("Staking", "OffendingValidators")
     except Exception as e:
-        log.error("Connection lost while in \'substrate.query(\"Session\", \"DisabledValidators\")\'. Error: %s" % e)
+        log.error(f"Failed to query offending validators: {e}")
         return
 
     # Bc we use pop to remove disabled, go backwards through this list. Otherwise, popping early index shifts later ones
-    disabled_set.value.reverse()
-    for val in disabled_set.value:
-        validator_set.value.pop(val)
+    offending_set.value.reverse()
+    for val in offending_set.value:
+        try:
+            validator_set.value.pop(val[0])
+        except IndexError as e:
+            log.error(f"Invalid offending set value {val} for validator set of {len(validator_set.value)}: {e}")
 
     found = False
     for val in validator_set.value:
