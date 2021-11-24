@@ -225,43 +225,52 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     last_push_time = time.time()
     last_line_time = time.time()
     while True:
-        event_buffer, log_events, events_size, last_line_time = process_line(log_file, event_buffer, log_events,
-                                                                             events_size, last_line_time)
+        try:
+            event_buffer, log_events, events_size, last_line_time = process_line(log_file, event_buffer, log_events,
+                                                                                 events_size, last_line_time)
 
-        # Check if we should send events to cloudwatch
-        log_event_size = 26
-        is_over_max_size = len(event_buffer.encode(encoding='utf-8')) + log_event_size + events_size > max_send_size
-        is_over_max_events = len(log_events) >= max_events
-        is_time_to_push = time.time() - last_push_time > jitter_frequency
+            # Check if we should send events to cloudwatch
+            log_event_size = 26
+            is_over_max_size = len(event_buffer.encode(encoding='utf-8')) + log_event_size + events_size > max_send_size
+            is_over_max_events = len(log_events) >= max_events
+            is_time_to_push = time.time() - last_push_time > jitter_frequency
 
-        if (is_over_max_size or is_over_max_events or is_time_to_push) and len(log_events) > 0:
-            jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
-            # Send to cloudwatch, then reset events, size and push time
-            ok = False
+            if (is_over_max_size or is_over_max_events or is_time_to_push) and len(log_events) > 0:
+                jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
+                # Send to cloudwatch, then reset events, size and push time
+                ok = False
+                try:
+                    upload_sequence_token, ok = send(client, upload_sequence_token,
+                                                     log_events, log_stream_name, cloudwatch_log_group)
+                except Exception as e:
+                    log.error(f"failed to upload cloudwatch logs: {e}")
+                    log_file, client, log_stream_name, upload_sequence_token = init(log_file_path, id_path,
+                                                                                    cloudwatch_log_group, log_file, client)
+
+                if ok:
+                    events_size = 0
+                    log_events = []
+                    last_push_time = time.time()
+
+            # Clear the log file if it has exceeded maximum size
+            log_size = os.path.getsize(log_file_path)
+            log.debug("Current log {} size: {}".format(log_file_path, log_size))
+            if log_size > max_size:
+                # Close the old log file
+                log.info("Log {} has reached maximum size: {}. Clearing...".format(log_file_path, log_size))
+                log_file.close()
+                # Overwrite the log with an empty file and reopen
+                log_file = open(log_file_path, "w+")
+                log.info("Log {} has been cleared. New Size: {}".format(
+                    log_file_path, os.path.getsize(log_file_path)))
+
+        except Exception as e:
+            log.error(f"Error in cloudwatch logging: {e}")
             try:
-                upload_sequence_token, ok = send(client, upload_sequence_token,
-                                                 log_events, log_stream_name, cloudwatch_log_group)
-            except Exception as e:
-                log.error(f"failed to upload cloudwatch logs: {e}")
                 log_file, client, log_stream_name, upload_sequence_token = init(log_file_path, id_path,
                                                                                 cloudwatch_log_group, log_file, client)
-
-            if ok:
-                events_size = 0
-                log_events = []
-                last_push_time = time.time()
-
-        # Clear the log file if it has exceeded maximum size
-        log_size = os.path.getsize(log_file_path)
-        log.debug("Current log {} size: {}".format(log_file_path, log_size))
-        if log_size > max_size:
-            # Close the old log file
-            log.info("Log {} has reached maximum size: {}. Clearing...".format(log_file_path, log_size))
-            log_file.close()
-            # Overwrite the log with an empty file and reopen
-            log_file = open(log_file_path, "w+")
-            log.info("Log {} has been cleared. New Size: {}".format(
-                log_file_path, os.path.getsize(log_file_path)))
+            except Exception as e:
+                log.error("Failed to re-initialize cloudwatch logging for {}: {}".format(cloudwatch_log_group, e))
 
 
 def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
