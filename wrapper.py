@@ -174,32 +174,81 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
                           aws_secret_access_key=access_key_secret,
                           config=config)
 
-    # Open the log file read-only and pin its current size if it already exists
-    log_file = None
-    if os.path.isfile(log_file_path):
-        log_file = open(log_file_path, 'r')
-        log_file.seek(0, os.SEEK_END)
-
     # Start the log backup service
-    log.info("Starting logger for {} at {}...".format(log_file_path, cloudwatch_log_group))
+    log.info(f"Starting logger for {log_file_path} at {cloudwatch_log_group}...")
     process = multiprocessing.Process(target=cloudwatch_log,
                                       args=(cloudwatch_log_group, log_file_path,
-                                            id_path, log_file, client))
+                                            id_path, client))
     process.start()
     return process
 
 
-def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, client):
+def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, client):
     """
     cloudwatch_log is intended to run in a thread.  It will monitor the file at
     log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
     stream, one will be created for it, named by node ID.
 
     :param client: cloudwatch client for this logging thread
-    :param log_file: log file for this logging thread
     :param cloudwatch_log_group: log group name for cloudwatch logging
     :param log_file_path: Path to the log file
     :param id_path: path to node's id file
+    """
+
+    while True:
+        try:
+            client, log_stream_name, upload_sequence_token = init(log_file_path, id_path,
+                                                                  cloudwatch_log_group, client)
+            log_loop(log_file_path, cloudwatch_log_group, client, log_stream_name, upload_sequence_token)
+        except Exception as e:
+            log.error(f"Unhandled logging error: {e}")
+            continue
+
+
+def init(log_file_path, id_path, cloudwatch_log_group, client):
+    """
+    Initialize client for cloudwatch logging
+    :param client: cloudwatch client for this logging thread
+    :param log_file_path: path to log output
+    :param id_path: path to id file
+    :param cloudwatch_log_group: cloudwatch log group name
+    :return log_file, client, log_stream_name, upload_sequence_token:
+    """
+    # Wait for the IDF in order to use ID as log prefix
+    log.info("Waiting for IDF...")
+    while read_cmix_id(id_path) is None:
+        time.sleep(10)
+    log_prefix = read_cmix_id(id_path)
+
+    log_name = os.path.basename(log_file_path)  # Name of the log file
+    log_stream_name = f"{log_prefix}-{log_name}"  # Stream name should be {ID}-{node/gateway/wrapper}.log
+
+    # Determine if stream exists.  If not, make one.
+    streams = client.describe_log_streams(logGroupName=cloudwatch_log_group,
+                                          logStreamNamePrefix=log_stream_name)['logStreams']
+
+    upload_sequence_token = ""
+    if len(streams) == 0:
+        # Create a log stream on the fly if ours does not exist
+        client.create_log_stream(logGroupName=cloudwatch_log_group, logStreamName=log_stream_name)
+    else:
+        # If our log stream exists, we need to get the sequence token from this call to start sending to it again
+        for s in streams:
+            if log_stream_name == s['logStreamName'] and 'uploadSequenceToken' in s.keys():
+                upload_sequence_token = s['uploadSequenceToken']
+
+    return client, log_stream_name, upload_sequence_token
+
+
+def log_loop(log_file_path, cloudwatch_log_group, client, log_stream_name, upload_sequence_token):
+    """
+
+    :param log_file_path:
+    :param cloudwatch_log_group:
+    :param client:
+    :param log_stream_name:
+    :param upload_sequence_token:
+    :return:
     """
     # Constants
     megabyte = 1048576  # Size of one megabyte in bytes
@@ -215,112 +264,46 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, log_file, clien
     log_events = []  # Buffer of events from log not yet sent to cloudwatch
     events_size = 0
 
-    try:
-        log_file, client, log_stream_name, upload_sequence_token = init(log_file_path, id_path,
-                                                                        cloudwatch_log_group, log_file, client)
-    except Exception as e:
-        log.error("Failed to init cloudwatch logging for {}: {}".format(cloudwatch_log_group, e))
-        return
+    # Wait for the log file to exist, then open it
+    log.info(f"Waiting for {log_file_path}...")
+    while not os.path.isfile(log_file_path):
+        time.sleep(1)
+    # Open the newly-created log file as read-only
+    log_file = open(log_file_path, 'r')
+    log_file.seek(0, os.SEEK_END)
 
     last_push_time = time.time()
     last_line_time = time.time()
     while True:
-        try:
-            event_buffer, log_events, events_size, last_line_time = process_line(log_file, event_buffer, log_events,
-                                                                                 events_size, last_line_time)
+        event_buffer, log_events, events_size, last_line_time = process_line(log_file, event_buffer, log_events,
+                                                                             events_size, last_line_time)
 
-            # Check if we should send events to cloudwatch
-            log_event_size = 26
-            is_over_max_size = len(event_buffer.encode(encoding='utf-8')) + log_event_size + events_size > max_send_size
-            is_over_max_events = len(log_events) >= max_events
-            is_time_to_push = time.time() - last_push_time > jitter_frequency
+        # Check if we should send events to cloudwatch
+        log_event_size = 26
+        is_over_max_size = len(event_buffer.encode(encoding='utf-8')) + log_event_size + events_size > max_send_size
+        is_over_max_events = len(log_events) >= max_events
+        is_time_to_push = time.time() - last_push_time > jitter_frequency
 
-            if (is_over_max_size or is_over_max_events or is_time_to_push) and len(log_events) > 0:
-                jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
-                # Send to cloudwatch, then reset events, size and push time
-                ok = False
-                try:
-                    upload_sequence_token, ok = send(client, upload_sequence_token,
-                                                     log_events, log_stream_name, cloudwatch_log_group)
-                except Exception as e:
-                    log.error(f"failed to upload cloudwatch logs: {e}")
-                    log_file, client, log_stream_name, upload_sequence_token = init(log_file_path, id_path,
-                                                                                    cloudwatch_log_group, log_file, client)
+        if (is_over_max_size or is_over_max_events or is_time_to_push) and len(log_events) > 0:
+            jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
+            # Send to cloudwatch, then reset events, size and push time
+            upload_sequence_token, ok = send(client, upload_sequence_token,
+                                             log_events, log_stream_name, cloudwatch_log_group)
+            if ok:
+                events_size = 0
+                log_events = []
+                last_push_time = time.time()
 
-                if ok:
-                    events_size = 0
-                    log_events = []
-                    last_push_time = time.time()
-
-            # Clear the log file if it has exceeded maximum size
-            log_size = os.path.getsize(log_file_path)
-            log.debug("Current log {} size: {}".format(log_file_path, log_size))
-            if log_size > max_size:
-                # Close the old log file
-                log.info("Log {} has reached maximum size: {}. Clearing...".format(log_file_path, log_size))
-                log_file.close()
-                # Overwrite the log with an empty file and reopen
-                log_file = open(log_file_path, "w+")
-                log.info("Log {} has been cleared. New Size: {}".format(
-                    log_file_path, os.path.getsize(log_file_path)))
-
-        except Exception as e:
-            log.error(f"Error in cloudwatch logging: {e}")
-            try:
-                log_file, client, log_stream_name, upload_sequence_token = init(log_file_path, id_path,
-                                                                                cloudwatch_log_group, log_file, client)
-            except Exception as e:
-                log.error("Failed to re-initialize cloudwatch logging for {}: {}".format(cloudwatch_log_group, e))
-
-
-def init(log_file_path, id_path, cloudwatch_log_group, log_file, client):
-    """
-    Initialize client for cloudwatch logging
-    :param client: cloudwatch client for this logging thread
-    :param log_file_path: path to log output
-    :param id_path: path to id file
-    :param cloudwatch_log_group: cloudwatch log group name
-    :param log_file: log file to read lines from
-    :return log_file, client, log_stream_name, upload_sequence_token:
-    """
-    upload_sequence_token = ""
-
-    # Wait for the IDF in order to use ID as log prefix
-    log.info("Waiting for IDF...")
-    while read_cmix_id(id_path) is None:
-        time.sleep(10)
-    log_prefix = read_cmix_id(id_path)
-
-    log_name = os.path.basename(log_file_path)  # Name of the log file
-    log_stream_name = "{}-{}".format(log_prefix, log_name)  # Stream name should be {ID}-{node/gateway/wrapper}.log
-
-    # Wait for the log file to exist, then open it
-    if not log_file:
-        log.info("Waiting for {}...".format(log_file_path))
-        while not os.path.isfile(log_file_path):
-            time.sleep(1)
-        # Open the newly-created log file as read-only
-        log_file = open(log_file_path, 'r')
-
-    try:
-        # Determine if stream exists.  If not, make one.
-        streams = client.describe_log_streams(logGroupName=cloudwatch_log_group,
-                                              logStreamNamePrefix=log_stream_name)['logStreams']
-
-        if len(streams) == 0:
-            # Create a log stream on the fly if ours does not exist
-            client.create_log_stream(logGroupName=cloudwatch_log_group, logStreamName=log_stream_name)
-        else:
-            # If our log stream exists, we need to get the sequence token from this call to start sending to it again
-            for s in streams:
-                if log_stream_name == s['logStreamName'] and 'uploadSequenceToken' in s.keys():
-                    upload_sequence_token = s['uploadSequenceToken']
-
-    except Exception as e:
-        log.error(f"Failed to initialize logging: {e}")
-        raise e
-
-    return log_file, client, log_stream_name, upload_sequence_token
+        # Clear the log file if it has exceeded maximum size
+        log_size = os.path.getsize(log_file_path)
+        log.debug(f"Current log {log_file_path} size: {log_size}")
+        if log_size > max_size:
+            # Close the old log file
+            log.info(f"Log {log_file_path} has reached maximum size: {log_size}. Clearing...")
+            log_file.close()
+            # Overwrite the log with an empty file and reopen
+            log_file = open(log_file_path, "w+")
+            log.info(f"Log {log_file_path} has been cleared. New Size: {os.path.getsize(log_file_path)}")
 
 
 def process_line(log_file, event_buffer, log_events, events_size, last_line_time):
@@ -328,6 +311,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
     Accepts current buffer and log events from main loop
     Processes one line of input, either adding an event or adding it to the buffer
     New events are marked by a string in log_starters, or are separated by more than 0.5 seconds
+
     :param log_file: file to read line from
     :param last_line_time: Timestamp when last log line was read
     :param events_size: message size for log events per aws docs
@@ -379,6 +363,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
 def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_log_group):
     """
     send is a helper function for cloudwatch_log, used to push a batch of events to the proper stream
+
     :param log_events: Log events to be sent to cloudwatch
     :param log_stream_name: Name of cloudwatch log stream
     :param cloudwatch_log_group: Name of cloudwatch log group
@@ -386,44 +371,27 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
     :param upload_sequence_token: sequence token for log stream
     :return: new sequence token
     """
-    ok = True
     if len(log_events) == 0:
         return upload_sequence_token
 
-    try:
-        if upload_sequence_token == "":
-            # for the first message in a stream, there is no sequence token
-            resp = client.put_log_events(logGroupName=cloudwatch_log_group,
-                                         logStreamName=log_stream_name,
-                                         logEvents=log_events)
-        else:
-            resp = client.put_log_events(logGroupName=cloudwatch_log_group,
-                                         logStreamName=log_stream_name,
-                                         logEvents=log_events,
-                                         sequenceToken=upload_sequence_token)
-        upload_sequence_token = resp['nextSequenceToken']  # set the next sequence token
+    if upload_sequence_token == "":
+        # for the first message in a stream, there is no sequence token
+        resp = client.put_log_events(logGroupName=cloudwatch_log_group,
+                                     logStreamName=log_stream_name,
+                                     logEvents=log_events)
+    else:
+        resp = client.put_log_events(logGroupName=cloudwatch_log_group,
+                                     logStreamName=log_stream_name,
+                                     logEvents=log_events,
+                                     sequenceToken=upload_sequence_token)
+    upload_sequence_token = resp['nextSequenceToken']  # set the next sequence token
 
-        # IF anything was rejected, log as warning
-        if 'rejectedLogEventsInfo' in resp.keys():
-            log.warning("Some log events were rejected:")
-            log.warning(resp['rejectedLogEventsInfo'])
+    # IF anything was rejected, log as warning
+    if 'rejectedLogEventsInfo' in resp.keys():
+        log.warning("Some log events were rejected:")
+        log.warning(resp['rejectedLogEventsInfo'])
 
-    except client.exceptions.InvalidSequenceTokenException as e:
-        ok = False
-        log.warning(f"Boto3 InvalidSequenceTokenException encountered using token {upload_sequence_token}: {e}")
-        upload_sequence_token = e.response['Error']['Message'].split()[-1]
-        raise e
-    except botocore.exceptions.ClientError as e:
-        ok = False
-        log.error("Boto3 client error encountered: %s" % e)
-        raise e
-    except Exception as e:
-        ok = False
-        log.error(e)
-        raise e
-    finally:
-        # Always return upload sequence token - dropping this causes lots of errors
-        return upload_sequence_token, ok
+    return upload_sequence_token
 
 
 ########################################################################################################################
@@ -433,8 +401,7 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
 
 def check_networking():
     """
-    check_networking checks for networking settings essential for operation of
-    cMix.
+    check_networking checks for networking settings essential for operation of cMix.
     """
     slowcmd = [
         "sudo /bin/bash -c \"echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle\"",
