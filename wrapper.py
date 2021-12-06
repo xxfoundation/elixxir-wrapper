@@ -200,7 +200,7 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, client):
                                                           cloudwatch_log_group, client)
             log_loop(log_file_path, cloudwatch_log_group, client, log_stream_name, upload_sequence_token)
         except Exception as e:
-            log.error(f"Unhandled logging error: {e}")
+            log.error(f"Unhandled logging error: {e}", exc_info=True)
             continue
 
 
@@ -288,12 +288,11 @@ def log_loop(log_file_path, cloudwatch_log_group, client, log_stream_name, uploa
         if (is_over_max_size or is_over_max_events or is_time_to_push) and len(log_events) > 0:
             jitter_frequency = push_frequency + (random.randint(-jitter_size, jitter_size) / 1000)
             # Send to cloudwatch, then reset events, size and push time
-            upload_sequence_token, ok = send(client, upload_sequence_token,
-                                             log_events, log_stream_name, cloudwatch_log_group)
-            if ok:
-                events_size = 0
-                log_events = []
-                last_push_time = time.time()
+            upload_sequence_token = send(client, upload_sequence_token,
+                                         log_events, log_stream_name, cloudwatch_log_group)
+            events_size = 0
+            log_events = []
+            last_push_time = time.time()
 
         # Clear the log file if it has exceeded maximum size
         log_size = os.path.getsize(log_file_path)
