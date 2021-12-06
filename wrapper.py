@@ -23,7 +23,6 @@ import multiprocessing
 import time
 import boto3
 from botocore.config import Config
-import botocore.exceptions
 import shutil
 from OpenSSL import crypto
 from substrateinterface import SubstrateInterface
@@ -150,9 +149,9 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
     """
     start_cw_logger is a blocking function which starts the thread to log to cloudwatch.
     This requires a blocking function so we can ensure that if a log file is present,
-    it is opened before logging resumes.  This prevents lines from being omitted in cloudwatch.
+    it is opened before logging resumes. This prevents lines from being omitted in cloudwatch.
 
-    :param cloudwatch_log_group: log group name for cloudwatch logging
+    :param cloudwatch_log_group: log group name
     :param log_file_path: Path to the log file
     :param id_path: path to node's id file
     :param region: AWS region
@@ -186,19 +185,19 @@ def start_cw_logger(cloudwatch_log_group, log_file_path, id_path, region, access
 def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, client):
     """
     cloudwatch_log is intended to run in a thread.  It will monitor the file at
-    log_file_path and send the logs to cloudwatch.  Note: if the node lacks a
+    log_file_path and send the logs to cloudwatch. Note: if the node lacks a
     stream, one will be created for it, named by node ID.
 
     :param client: cloudwatch client for this logging thread
-    :param cloudwatch_log_group: log group name for cloudwatch logging
+    :param cloudwatch_log_group: log group name
     :param log_file_path: Path to the log file
     :param id_path: path to node's id file
     """
 
     while True:
         try:
-            client, log_stream_name, upload_sequence_token = init(log_file_path, id_path,
-                                                                  cloudwatch_log_group, client)
+            log_stream_name, upload_sequence_token = init(log_file_path, id_path,
+                                                          cloudwatch_log_group, client)
             log_loop(log_file_path, cloudwatch_log_group, client, log_stream_name, upload_sequence_token)
         except Exception as e:
             log.error(f"Unhandled logging error: {e}")
@@ -207,12 +206,13 @@ def cloudwatch_log(cloudwatch_log_group, log_file_path, id_path, client):
 
 def init(log_file_path, id_path, cloudwatch_log_group, client):
     """
-    Initialize client for cloudwatch logging
+    Initialize the logging client and associated parameters
+
     :param client: cloudwatch client for this logging thread
-    :param log_file_path: path to log output
+    :param log_file_path: Path to the log file
     :param id_path: path to id file
-    :param cloudwatch_log_group: cloudwatch log group name
-    :return log_file, client, log_stream_name, upload_sequence_token:
+    :param cloudwatch_log_group: log group name
+    :return log_stream_name, upload_sequence_token:
     """
     # Wait for the IDF in order to use ID as log prefix
     log.info("Waiting for IDF...")
@@ -237,18 +237,19 @@ def init(log_file_path, id_path, cloudwatch_log_group, client):
             if log_stream_name == s['logStreamName'] and 'uploadSequenceToken' in s.keys():
                 upload_sequence_token = s['uploadSequenceToken']
 
-    return client, log_stream_name, upload_sequence_token
+    return log_stream_name, upload_sequence_token
 
 
 def log_loop(log_file_path, cloudwatch_log_group, client, log_stream_name, upload_sequence_token):
     """
+    Handles the main loop for cloudwatch logging, including log file truncation
 
-    :param log_file_path:
-    :param cloudwatch_log_group:
-    :param client:
-    :param log_stream_name:
-    :param upload_sequence_token:
-    :return:
+    :param log_file_path: Path to the log file
+    :param cloudwatch_log_group: log group name
+    :param client: Boto3 client for this logging thread
+    :param log_stream_name: log stream name
+    :param upload_sequence_token: sequence token for log stream start
+    :return: None
     """
     # Constants
     megabyte = 1048576  # Size of one megabyte in bytes
@@ -308,7 +309,7 @@ def log_loop(log_file_path, cloudwatch_log_group, client, log_stream_name, uploa
 
 def process_line(log_file, event_buffer, log_events, events_size, last_line_time):
     """
-    Accepts current buffer and log events from main loop
+    Accepts current buffer and log events from log_loop
     Processes one line of input, either adding an event or adding it to the buffer
     New events are marked by a string in log_starters, or are separated by more than 0.5 seconds
 
@@ -317,7 +318,7 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
     :param events_size: message size for log events per aws docs
     :param event_buffer: string buffer of concatenated lines that make up a single event
     :param log_events: current array of events
-    :return:
+    :return event_buffer, log_events, events_size, last_line_time:
     """
     # using these to delineate the start of an event
     log_starters = ["INFO", "WARN", "DEBUG", "ERROR", "FATAL", "TRACE"]
@@ -362,12 +363,12 @@ def process_line(log_file, event_buffer, log_events, events_size, last_line_time
 
 def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_log_group):
     """
-    send is a helper function for cloudwatch_log, used to push a batch of events to the proper stream
+    Helper function for log_loop, used to push a batch of events to the proper stream
 
     :param log_events: Log events to be sent to cloudwatch
-    :param log_stream_name: Name of cloudwatch log stream
+    :param log_stream_name: log stream name
     :param cloudwatch_log_group: Name of cloudwatch log group
-    :param client: cloudwatch logs client
+    :param client: Boto3 client for this logging thread
     :param upload_sequence_token: sequence token for log stream
     :return: new sequence token
     """
