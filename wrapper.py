@@ -46,7 +46,7 @@ def get_substrate_provider(consensus_url):
         log.error("No local Substrate node running.")
         return None
     except Exception as e:
-        log.error("Failed to get substrate chain connection: %s" % e)
+        log.error(f"Failed to get substrate chain connection: {e}")
         return None
 
 
@@ -61,7 +61,7 @@ def check_sync(substrate):
         result = substrate.rpc_request('system_syncState', []).get('result')
         return result["currentBlock"] == result["highestBlock"]
     except Exception as e:
-        log.error("Failed to query sync state: %s" % e)
+        log.error(f"Failed to query sync state: {e}")
     return False
 
 
@@ -83,10 +83,10 @@ def poll_cmix_hashes(substrate):
             params=[]
         )
         result = cmix_hashes.value
-        log.debug("cMix hashes: {}".format(result))
+        log.debug(f"cMix hashes: {result}")
         return result
     except Exception as e:
-        log.error("Connection lost while in \'substrate.query(\"XXCmix\", \"CmixHashes\")\'. Error: %s" % e)
+        log.error(f"Connection lost while in \'substrate.query(\"XXCmix\", \"CmixHashes\")\'. Error: {e}")
         return None
 
 
@@ -100,13 +100,13 @@ def poll_ready(substrate):
     try:
         validator_set = substrate.query("Session", "Validators")
     except Exception as e:
-        log.error("Connection lost while in \'substrate.query(\"Session\", \"Validators\")\'. Error: %s" % e)
+        log.error(f"Connection lost while in \'substrate.query(\"Session\", \"Validators\")\'. Error: {e}")
         return
 
     try:
         disabled_set = substrate.query("Session", "DisabledValidators")
     except Exception as e:
-        log.error("Connection lost while in \'substrate.query(\"Session\", \"DisabledValidators\")\'. Error: %s" % e)
+        log.error(f"Connection lost while in \'substrate.query(\"Session\", \"DisabledValidators\")\'. Error: {e}" )
         return
 
     # Bc we use pop to remove disabled, go backwards through this list. Otherwise, popping early index shifts later ones
@@ -132,7 +132,7 @@ def poll_ready(substrate):
 
         cmix_root = ledger['cmix_id']
         if cmix_root == hex_id:
-            log.debug("Node found in active validator set: " + val)
+            log.debug(f"Node found in active validator set: {val}")
             found = True
             break
         if found is False:
@@ -410,8 +410,7 @@ def check_networking():
     networking_good = True
     slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().strip()
     if '0' not in slowsetting:
-        log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format(
-            '\n\t'.join(slowcmd)))
+        log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format('\n\t'.join(slowcmd)))
         networking_good = False
     else:
         networking_good = True
@@ -452,12 +451,9 @@ def download(src_path, dst_path, s3_bucket, region,
             aws_secret_access_key=access_key_secret,
             region_name=region).resource("s3")
         s3.Bucket(s3_bucket).download_file(src_path, dst_path)
-        log.debug("Successfully downloaded to {} from {}/{}".format(dst_path,
-                                                                    s3_bucket,
-                                                                    src_path))
+        log.debug(f"Successfully downloaded to {dst_path} from {s3_bucket}/{src_path}")
     except Exception as error:
-        log.error("Unable to download {} from {}: {}".format(src_path, s3_bucket, error),
-                  exc_info=True)
+        log.error(f"Unable to download {src_path} from {s3_bucket}: {error}", exc_info=True)
 
 
 def update(target, tmp_path, install_path, expected_hash):
@@ -475,8 +471,7 @@ def update(target, tmp_path, install_path, expected_hash):
     actual_hash = hashlib.blake2s(update_bytes).hexdigest()
     if actual_hash != expected_hash:
         os.remove(path=tmp_path)
-        log.error("Downloaded file {} does not match provided hash. Expected {}, got {}".format(
-            tmp_path, expected_hash, actual_hash))
+        log.error(f"Downloaded file {tmp_path} does not match provided hash. Expected {expected_hash}, got {actual_hash}")
         return False
 
     # Move the downloaded file into place, overwriting anything that's there
@@ -484,8 +479,7 @@ def update(target, tmp_path, install_path, expected_hash):
         os.makedirs(os.path.dirname(install_path), exist_ok=True)
         os.replace(tmp_path, install_path)
     except Exception as err:
-        log.error("Could not overwrite {} with {}: {}".format(
-            install_path, tmp_path, err))
+        log.error(f"Could not overwrite {install_path} with {tmp_path}: {err}")
         return False
 
     # Handle binary updates
@@ -524,7 +518,7 @@ def start_binary(bin_path, log_file_path, bin_args):
         p = subprocess.Popen([bin_path] + bin_args,
                              stdout=subprocess.DEVNULL,
                              stderr=err_out)
-        log.info(bin_path + " started at PID " + str(p.pid))
+        log.info(f"{bin_path} started at PID {p.pid}")
         return p
 
 
@@ -537,10 +531,9 @@ def terminate_process(p):
     """
     if p is not None and p.poll() is None:
         pid = p.pid
-        log.info("Terminating process {}...".format(pid))
+        log.info(f"Terminating process {pid}...")
         p.terminate()
-        log.info("Process {} terminated with exit code {}".
-                 format(pid, p.wait()))
+        log.info(f"Process {pid} terminated with exit code {p.wait()}")
 
 
 def terminate_multiprocess(p):
@@ -552,13 +545,12 @@ def terminate_multiprocess(p):
     """
     if p is not None and p.is_alive():
         pid = p.pid
-        log.info("Terminating process {}...".format(pid))
+        log.info(f"Terminating process {pid}...")
         p.terminate()
         while p.is_alive():
-            log.info("Waiting for {} to terminate...".format(pid))
+            log.info(f"Waiting for {pid} to terminate...")
             time.sleep(0.5)
-        log.info("Process {} terminated with exit code {}".
-                 format(pid, p.exitcode))
+        log.info(f"Process {pid} terminated with exit code {p.exitcode}")
 
 
 # Static cached cmix ID when we successfully read it from the IDF
@@ -593,7 +585,7 @@ def read_cmix_id(id_path):
                     cmix_id = new_cmix_id
                     return cmix_id
     except Exception as error:
-        log.warning("Could not open IDF at {}: {}".format(id_path, error))
+        log.warning(f"Could not open IDF at {id_path}: {error}")
         return None
 
 
@@ -620,7 +612,7 @@ def verify_cmd(in_buf, public_key_path):
             crypto.verify(key, signature, bytes(cmd, 'utf-8'), 'sha256')
             return command_json, True
         except Exception as error:
-            log.error("Unable to verify command: {}".format(error))
+            log.error(f"Unable to verify command: {error}")
             return command_json, False
 
 
@@ -644,9 +636,9 @@ def save_cmd(file_path, dest_dir, valid, cmd_time):
 
     fparts = os.path.basename(file_path).split('.')
     if not valid:
-        fparts[0] = "INVALID-{}".format(fparts[0])
+        fparts[0] = f"INVALID-{fparts[0]}"
     # destdir/command-2849204.json
-    dest = "{}/{}-{}.{}".format(dest_dir, fparts[0], int(cmd_time), fparts[1])
+    dest = f"{dest_dir}/{fparts[0]}-{int(cmd_time)}.{fparts[1]}"
     shutil.copyfile(file_path, dest)
 
 
@@ -748,7 +740,7 @@ def get_args():
 
     # Handle unknown args
     if len(unknown) > 0:
-        log.warning("Unknown arguments: {}".format(unknown))
+        log.warning(f"Unknown arguments: {unknown}")
     return args
 
 
@@ -777,7 +769,7 @@ def main():
         raise Exception
 
     # Command line arguments
-    log.info("Running with configuration: {}".format(args))
+    log.info(f"Running with configuration: {args}")
 
     binary_path = args["binary_path"]
     gpulib_path = args["gpu_lib"]
@@ -794,8 +786,8 @@ def main():
     wrapper_log_path = args["wrapper_log"]
     err_output_path = args["err_path"]
     id_path = args["id_path"]
-    version_file = management_directory + "/version.jsonl"
-    command_file = management_directory + "/command.jsonl"
+    version_file = f"{management_directory}/version.jsonl"
+    command_file = f"{management_directory}/command.jsonl"
     tmp_dir = args["tmp_dir"]
     os.makedirs(tmp_dir, exist_ok=True)
     cmd_log_dir = args["cmd_dir"]
@@ -883,7 +875,7 @@ def main():
                                                         s3_access_key_id, s3_access_key_secret)
 
     # Main command/control loop
-    log.info("Script initialized at {}".format(time.time()))
+    log.info(f"Script initialized at {time.time()}")
     while True:
         time.sleep(command_frequency)
 
@@ -908,11 +900,11 @@ def main():
                         current_hash = current_hashes.get(
                             Targets.WRAPPER, "0000000000000000000000000000000000000000000000000000000000000000")
                         if new_hash != current_hash:
-                            log.info("{} update required: {} -> {}".format(Targets.WRAPPER, current_hash, new_hash))
+                            log.info(f"{Targets.WRAPPER} update required: {current_hash} -> {new_hash}")
                             # Get local destination path
                             install_path = valid_paths[Targets.WRAPPER]
                             # Get remote source path
-                            remote_path = "{}/{}".format(Targets.WRAPPER, new_hash)
+                            remote_path = f"{Targets.WRAPPER}/{new_hash}"
                             # Download file to temporary location
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
@@ -929,11 +921,11 @@ def main():
                             current_hash = current_hashes.get(
                                 Targets.GPUBIN, "0000000000000000000000000000000000000000000000000000000000000000")
                             if new_hash != current_hash:
-                                log.info("{} update required: {} -> {}".format(Targets.GPUBIN, current_hash, new_hash))
+                                log.info(f"{Targets.GPUBIN} update required: {current_hash} -> {new_hash}")
                                 # Get local destination path
                                 install_path = valid_paths[Targets.GPUBIN]
                                 # Get remote source path
-                                remote_path = "{}/{}".format(Targets.GPUBIN, new_hash)
+                                remote_path = f"{Targets.GPUBIN}/{new_hash}"
                                 # Download file to temporary location
                                 tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                                 download(remote_path, tmp_path,
@@ -949,11 +941,11 @@ def main():
                             current_hash = current_hashes.get(
                                 Targets.GPULIB, "0000000000000000000000000000000000000000000000000000000000000000")
                             if new_hash != current_hash:
-                                log.info("{} update required: {} -> {}".format(Targets.GPULIB, current_hash, new_hash))
+                                log.info(f"{Targets.GPULIB} update required: {current_hash} -> {new_hash}")
                                 # Get local destination path
                                 install_path = valid_paths[Targets.GPULIB]
                                 # Get remote source path
-                                remote_path = "{}/{}".format(Targets.GPULIB, new_hash)
+                                remote_path = f"{Targets.GPULIB}/{new_hash}"
                                 # Download file to temporary location
                                 tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                                 download(remote_path, tmp_path,
@@ -969,14 +961,13 @@ def main():
                         current_hash = current_hashes.get(
                             management_directory, "0000000000000000000000000000000000000000000000000000000000000000")
                         if new_hash != current_hash:
-                            log.info(
-                                "{} update required: {} -> {}".format(management_directory, current_hash, new_hash))
+                            log.info(f"{management_directory} update required: {current_hash} -> {new_hash}")
                             # Stop the process
                             terminate_process(process)
                             # Get local destination path
                             install_path = valid_paths[Targets.BINARY]
                             # Get remote source path
-                            remote_path = "{}/{}".format(management_directory, new_hash)
+                            remote_path = f"{management_directory}/{new_hash}"
                             # Download file to temporary location
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
@@ -990,8 +981,7 @@ def main():
                                 process = start_binary(valid_paths[Targets.BINARY], log_path,
                                                        ["--config", config_file])
                     except Exception as err:
-                        log.error("Unable to execute blockchain update: {}".format(err),
-                                  exc_info=True)
+                        log.error(f"Unable to execute blockchain update: {err}", exc_info=True)
 
         # If there is a (recently modified) recovered error file present, restart the main process
         if err_output_path \
@@ -1025,14 +1015,13 @@ def main():
                     # Verify the command file signature
                     signed_commands, ok = verify_cmd(cmd_file, rsa_certificate_path)
                     if signed_commands is None:
-                        log.error("Empty command file: {}".format(local_path))
+                        log.error(f"Empty command file: {local_path}")
                         save_cmd(local_path, cmd_log_dir, False, time.time())
                         continue
 
                     # Handle invalid signature
                     if not ok:
-                        log.error("Failed to verify signature for {}!".format(
-                            local_path), exc_info=True)
+                        log.error(f"Failed to verify signature for {local_path}!", exc_info=True)
                         save_cmd(local_path, cmd_log_dir, ok, time.time())
                         continue
 
@@ -1044,8 +1033,7 @@ def main():
                 # Note: We do not update unless we get a command we
                 # have verified and can actually attempt to run.
                 if timestamp <= timestamps[i]:
-                    log.debug("Command set with timestamp {} is outdated, "
-                              "ignoring...".format(timestamp))
+                    log.debug(f"Command set with timestamp {timestamp} is outdated, ignoring...")
                     continue
 
                 # Execute the commands in sequence
@@ -1057,7 +1045,7 @@ def main():
                         # Note: We get the ID for every valid command in case it changes
                         node_id = read_cmix_id(id_path)
                         if node_targets and node_id not in node_targets:
-                            log.info("Command does not apply to {}".format(node_id))
+                            log.info(f"Command does not apply to {node_id}")
                             timestamps[i] = timestamp
                             continue
 
@@ -1065,7 +1053,7 @@ def main():
                     command_type = command.get("command", "")
                     target = command.get("target", "")
                     info = command.get("info", dict())
-                    log.info("Executing command: {}".format(command))
+                    log.info(f"Executing command: {command}")
 
                     # START COMMAND ===========================
                     if command_type == "start":
@@ -1103,7 +1091,7 @@ def main():
                         # Delay for the given amount of time
                         # NOTE: Provided in MS, converted to seconds
                         duration = info.get("time", 0)
-                        log.info("Delaying for {}ms...".format(duration))
+                        log.info(f"Delaying for {duration}ms...")
                         time.sleep(duration / 1000)
 
                     # UPDATE COMMAND ===========================
@@ -1117,15 +1105,14 @@ def main():
 
                         # Verify valid install path
                         if target not in valid_paths.keys():
-                            log.error("Invalid update target: {}. Expected one of: {}".format(
-                                target, valid_paths.keys()))
+                            log.error(f"Invalid update target: {target}. Expected one of: {valid_paths.keys()}")
                             timestamps[i] = timestamp
                             continue
 
                         # Get local destination path
                         install_path = valid_paths[target]
                         # Get remote source path
-                        remote_path = "{}/{}".format(management_directory, info.get("path", ""))
+                        remote_path = f'{management_directory}/{info.get("path", "")}'
                         # Download file to temporary location
                         tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                         download(remote_path, tmp_path,
@@ -1138,13 +1125,12 @@ def main():
                             timestamps[i] = timestamp
                             continue
 
-                    log.info("Completed command: {}".format(command))
+                    log.info(f"Completed command: {command}")
 
                 # Update the timestamp in order to avoid repetition
                 timestamps[i] = timestamp
             except Exception as err:
-                log.error("Unable to execute commands: {}".format(err),
-                          exc_info=True)
+                log.error(f"Unable to execute commands: {err}", exc_info=True)
 
 
 if __name__ == "__main__":
