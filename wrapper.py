@@ -949,21 +949,15 @@ def main():
                         log.error(f"Unable to execute blockchain update: {err}", exc_info=True)
 
         # If there is a (recently modified) recovered error file present, restart the main process
-        if err_output_path \
-                and os.path.isfile(err_output_path) \
-                and os.path.getmtime(err_output_path) > last_error_timestamp:
+        if os.path.isfile(err_output_path) and os.path.getmtime(err_output_path) > last_error_timestamp:
             log.warning("Restarting binary due to error...")
             time.sleep(10)
-            try:
-                # Terminate the process if it still exists
-                if not (process is None or process.poll() is not None):
-                    terminate_process(process)
 
-                # Restart the main process
-                process = start_binary(valid_paths[Targets.BINARY], log_path,
-                                       ["--config", config_file])
-            except IOError as err:
-                log.error(err)
+            # Terminate the process if it still exists
+            terminate_process(process)
+            # Restart the main process
+            process = start_binary(valid_paths[Targets.BINARY], log_path,
+                                   ["--config", config_file])
             last_error_timestamp = time.time()
 
         for i, remote_path in enumerate(remotes_paths):
