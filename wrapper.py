@@ -708,6 +708,9 @@ def get_args():
     parser.add_argument("--id-path", type=str, required=False,
                         help="Path of the cMix/Gateway ID file",
                         default="/opt/xxnetwork/cred/IDF.json")
+    parser.add_argument("--hash-path", type=str, required=False,
+                        help="Path to an override file containing custom binary hashes",
+                        default=None)
     parser.add_argument("--err-path", type=str, required=False,
                         help="Path of the cMix error recovery file",
                         default="/opt/xxnetwork/logs/cmix-err.log")
@@ -790,6 +793,7 @@ def main():
     command_file = f"{management_directory}/command.jsonl"
     tmp_dir = args["tmp_dir"]
     os.makedirs(tmp_dir, exist_ok=True)
+    hash_path = args["hash_path"]
     cmd_log_dir = args["cmd_dir"]
     log_grp = args["cloudwatch_log_group"]
     consensus_log = args["consensus_log"]
@@ -885,8 +889,15 @@ def main():
                 # Handle lost connections
                 substrate = get_substrate_provider(consensus_url)
             else:
-                # Poll for hashes
-                hashes = poll_cmix_hashes(substrate)
+                if not hash_path:
+                    # Automatically poll substrate for hashes
+                    hashes = poll_cmix_hashes(substrate)
+                else:
+                    # Manually obtain hashes from file
+                    with open(hash_path, "r") as hash_file:
+                        hash_file_str = hash_file.readline().strip()
+                        hashes = json.loads(hash_file_str)
+
                 if hashes is None:
                     # Connection was lost
                     substrate = None
@@ -895,6 +906,9 @@ def main():
                     log.debug("Waiting for blockchain node to sync...")
                 else:
                     def update_item(update_target):
+                        """
+                        Helper function for updating targets (excluding cMix binaries)
+                        """
                         new_hash = hashes[update_target].replace("0x", "")
                         current_hash = current_hashes.get(
                             update_target, "0000000000000000000000000000000000000000000000000000000000000000")
