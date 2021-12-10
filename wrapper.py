@@ -407,15 +407,13 @@ def check_networking():
         "sudo /bin/bash -c \"echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle\"",
         "sudo /bin/bash -c \'echo \"net.ipv4.tcp_slow_start_after_idle=0\" >> /etc/sysctl.conf\'"
     ]
-    networking_good = True
     slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().strip()
     if '0' not in slowsetting:
         log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format('\n\t'.join(slowcmd)))
         networking_good = False
     else:
         networking_good = True
-    # Alternatively, if the initial windows are 700, that's acceptable
-    # too.
+    # Alternatively, if the initial windows are 700, that's acceptable too.
     if not networking_good:
         ipsetting = subprocess.run(['ip', 'route', 'show'], stdout=subprocess.PIPE)
         ipsettingout = ipsetting.stdout.decode('utf-8')
@@ -1022,7 +1020,7 @@ def main():
                             timestamps[i] = timestamp
                             continue
 
-                    # Command applies, so obtain command information
+                    # Command applies to us, so obtain command information
                     command_type = command.get("command", "")
                     target = command.get("target", "")
                     info = command.get("info", dict())
