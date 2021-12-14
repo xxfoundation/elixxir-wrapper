@@ -407,15 +407,13 @@ def check_networking():
         "sudo /bin/bash -c \"echo 0 > /proc/sys/net/ipv4/tcp_slow_start_after_idle\"",
         "sudo /bin/bash -c \'echo \"net.ipv4.tcp_slow_start_after_idle=0\" >> /etc/sysctl.conf\'"
     ]
-    networking_good = True
     slowsetting = open('/proc/sys/net/ipv4/tcp_slow_start_after_idle', 'r').read().strip()
     if '0' not in slowsetting:
         log.warning('tcp_slow_start_after_idle should be disabled, run:\n\t{}'.format('\n\t'.join(slowcmd)))
         networking_good = False
     else:
         networking_good = True
-    # Alternatively, if the initial windows are 700, that's acceptable
-    # too.
+    # Alternatively, if the initial windows are 700, that's acceptable too.
     if not networking_good:
         ipsetting = subprocess.run(['ip', 'route', 'show'], stdout=subprocess.PIPE)
         ipsettingout = ipsetting.stdout.decode('utf-8')
@@ -708,6 +706,9 @@ def get_args():
     parser.add_argument("--id-path", type=str, required=False,
                         help="Path of the cMix/Gateway ID file",
                         default="/opt/xxnetwork/cred/IDF.json")
+    parser.add_argument("--hash-path", type=str, required=False,
+                        help="Path to an override file containing custom binary hashes",
+                        default=None)
     parser.add_argument("--err-path", type=str, required=False,
                         help="Path of the cMix error recovery file",
                         default="/opt/xxnetwork/logs/cmix-err.log")
@@ -790,6 +791,7 @@ def main():
     command_file = f"{management_directory}/command.jsonl"
     tmp_dir = args["tmp_dir"]
     os.makedirs(tmp_dir, exist_ok=True)
+    hash_path = args["hash_path"]
     cmd_log_dir = args["cmd_dir"]
     log_grp = args["cloudwatch_log_group"]
     consensus_log = args["consensus_log"]
@@ -885,8 +887,15 @@ def main():
                 # Handle lost connections
                 substrate = get_substrate_provider(consensus_url)
             else:
-                # Poll for hashes
-                hashes = poll_cmix_hashes(substrate)
+                if not hash_path:
+                    # Automatically poll substrate for hashes
+                    hashes = poll_cmix_hashes(substrate)
+                else:
+                    # Manually obtain hashes from file
+                    with open(hash_path, "r") as hash_file:
+                        hash_file_str = hash_file.readline().strip()
+                        hashes = json.loads(hash_file_str)
+
                 if hashes is None:
                     # Connection was lost
                     substrate = None
@@ -894,67 +903,36 @@ def main():
                     # No hashes available, currently syncing
                     log.debug("Waiting for blockchain node to sync...")
                 else:
-                    try:
-                        # Check for wrapper updates
-                        new_hash = hashes[Targets.WRAPPER].replace("0x", "")
+                    def update_item(update_target):
+                        """
+                        Helper function for updating targets (excluding cMix binaries)
+                        """
+                        new_hash = hashes[update_target].replace("0x", "")
                         current_hash = current_hashes.get(
-                            Targets.WRAPPER, "0000000000000000000000000000000000000000000000000000000000000000")
+                            update_target, "0000000000000000000000000000000000000000000000000000000000000000")
                         if new_hash != current_hash:
-                            log.info(f"{Targets.WRAPPER} update required: {current_hash} -> {new_hash}")
+                            log.info(f"{update_target} update required: {current_hash} -> {new_hash}")
                             # Get local destination path
-                            install_path = valid_paths[Targets.WRAPPER]
+                            install_path = valid_paths[update_target]
                             # Get remote source path
-                            remote_path = f"{Targets.WRAPPER}/{new_hash}"
+                            remote_path = f"{update_target}/{new_hash}"
                             # Download file to temporary location
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
                                      s3_bin_bucket_name, s3_bucket_region,
                                      s3_access_key_id, s3_access_key_secret)
                             # Perform the update
-                            was_successful = update(Targets.WRAPPER, tmp_path, install_path, new_hash)
-                            if was_successful:
-                                current_hashes[Targets.WRAPPER] = new_hash
+                            if update(update_target, tmp_path, install_path, new_hash):
+                                current_hashes[update_target] = new_hash
 
+                    try:
+                        # Check for wrapper updates
+                        update_item(Targets.WRAPPER)
+
+                        # Check for GPU library updates
                         if not is_gateway:
-                            # Check for GPU bin updates
-                            new_hash = hashes[Targets.GPUBIN].replace("0x", "")
-                            current_hash = current_hashes.get(
-                                Targets.GPUBIN, "0000000000000000000000000000000000000000000000000000000000000000")
-                            if new_hash != current_hash:
-                                log.info(f"{Targets.GPUBIN} update required: {current_hash} -> {new_hash}")
-                                # Get local destination path
-                                install_path = valid_paths[Targets.GPUBIN]
-                                # Get remote source path
-                                remote_path = f"{Targets.GPUBIN}/{new_hash}"
-                                # Download file to temporary location
-                                tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
-                                download(remote_path, tmp_path,
-                                         s3_bin_bucket_name, s3_bucket_region,
-                                         s3_access_key_id, s3_access_key_secret)
-                                # Perform the update
-                                was_successful = update(Targets.GPUBIN, tmp_path, install_path, new_hash)
-                                if was_successful:
-                                    current_hashes[Targets.GPUBIN] = new_hash
-
-                            # Check for GPU lib updates
-                            new_hash = hashes[Targets.GPULIB].replace("0x", "")
-                            current_hash = current_hashes.get(
-                                Targets.GPULIB, "0000000000000000000000000000000000000000000000000000000000000000")
-                            if new_hash != current_hash:
-                                log.info(f"{Targets.GPULIB} update required: {current_hash} -> {new_hash}")
-                                # Get local destination path
-                                install_path = valid_paths[Targets.GPULIB]
-                                # Get remote source path
-                                remote_path = f"{Targets.GPULIB}/{new_hash}"
-                                # Download file to temporary location
-                                tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
-                                download(remote_path, tmp_path,
-                                         s3_bin_bucket_name, s3_bucket_region,
-                                         s3_access_key_id, s3_access_key_secret)
-                                # Perform the update
-                                was_successful = update(Targets.GPULIB, tmp_path, install_path, new_hash)
-                                if was_successful:
-                                    current_hashes[Targets.GPULIB] = new_hash
+                            update_item(Targets.GPUBIN)
+                            update_item(Targets.GPULIB)
 
                         # Check for binary updates
                         new_hash = hashes[management_directory].replace("0x", "")
@@ -962,8 +940,6 @@ def main():
                             management_directory, "0000000000000000000000000000000000000000000000000000000000000000")
                         if new_hash != current_hash:
                             log.info(f"{management_directory} update required: {current_hash} -> {new_hash}")
-                            # Stop the process
-                            terminate_process(process)
                             # Get local destination path
                             install_path = valid_paths[Targets.BINARY]
                             # Get remote source path
@@ -973,9 +949,10 @@ def main():
                             download(remote_path, tmp_path,
                                      s3_bin_bucket_name, s3_bucket_region,
                                      s3_access_key_id, s3_access_key_secret)
+                            # Stop the process
+                            terminate_process(process)
                             # Perform the update
-                            was_successful = update(Targets.BINARY, tmp_path, install_path, new_hash)
-                            if was_successful:
+                            if update(Targets.BINARY, tmp_path, install_path, new_hash):
                                 current_hashes[management_directory] = new_hash
                                 # Restart the process
                                 process = start_binary(valid_paths[Targets.BINARY], log_path,
@@ -984,21 +961,15 @@ def main():
                         log.error(f"Unable to execute blockchain update: {err}", exc_info=True)
 
         # If there is a (recently modified) recovered error file present, restart the main process
-        if err_output_path \
-                and os.path.isfile(err_output_path) \
-                and os.path.getmtime(err_output_path) > last_error_timestamp:
+        if os.path.isfile(err_output_path) and os.path.getmtime(err_output_path) > last_error_timestamp:
             log.warning("Restarting binary due to error...")
             time.sleep(10)
-            try:
-                # Terminate the process if it still exists
-                if not (process is None or process.poll() is not None):
-                    terminate_process(process)
 
-                # Restart the main process
-                process = start_binary(valid_paths[Targets.BINARY], log_path,
-                                       ["--config", config_file])
-            except IOError as err:
-                log.error(err)
+            # Terminate the process if it still exists
+            terminate_process(process)
+            # Restart the main process
+            process = start_binary(valid_paths[Targets.BINARY], log_path,
+                                   ["--config", config_file])
             last_error_timestamp = time.time()
 
         for i, remote_path in enumerate(remotes_paths):
@@ -1049,7 +1020,7 @@ def main():
                             timestamps[i] = timestamp
                             continue
 
-                    # Command applies, so obtain command information
+                    # Command applies to us, so obtain command information
                     command_type = command.get("command", "")
                     target = command.get("target", "")
                     info = command.get("info", dict())
@@ -1061,9 +1032,8 @@ def main():
                         if target == Targets.BINARY and (process is None or process.poll() is not None):
                             process = start_binary(valid_paths[Targets.BINARY], log_path,
                                                    ["--config", config_file])
-                        elif target == Targets.LOGGER:
-                            if not disable_cloudwatch \
-                                    and (logging_process is None or not logging_process.is_alive()):
+                        elif target == Targets.LOGGER and not disable_cloudwatch:
+                            if logging_process is None or not logging_process.is_alive():
                                 logging_process = start_cw_logger(log_grp, log_path,
                                                                   id_path, s3_bucket_region,
                                                                   s3_access_key_id, s3_access_key_secret)
