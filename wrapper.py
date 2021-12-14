@@ -386,7 +386,7 @@ def send(client, upload_sequence_token, log_events, log_stream_name, cloudwatch_
                                      sequenceToken=upload_sequence_token)
     upload_sequence_token = resp['nextSequenceToken']  # set the next sequence token
 
-    # IF anything was rejected, log as warning
+    # If anything was rejected, log as warning
     if 'rejectedLogEventsInfo' in resp.keys():
         log.warning("Some log events were rejected:")
         log.warning(resp['rejectedLogEventsInfo'])
