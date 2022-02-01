@@ -454,7 +454,7 @@ def download(src_path, dst_path, s3_bucket, region,
         log.error(f"Unable to download {src_path} from {s3_bucket}: {error}", exc_info=True)
 
 
-def update(target, tmp_path, install_path, expected_hash):
+def update(target, tmp_path, install_path, expected_hash, ignore_hash):
     """
     Update the current file with a staged file, assuming hashes match
 
@@ -462,15 +462,17 @@ def update(target, tmp_path, install_path, expected_hash):
     :param tmp_path: Staged update file
     :param install_path: Path to update the staged file over
     :param expected_hash: Hash that is expected to match the staged file
+    :param ignore_hash: Determines whether the hash should be verified
     :return: True if update successful, else false
     """
-    # Ensure the hash of the downloaded file matches the hash in the command
-    update_bytes = bytes(open(tmp_path, 'rb').read())
-    actual_hash = hashlib.blake2s(update_bytes).hexdigest()
-    if actual_hash != expected_hash:
-        os.remove(path=tmp_path)
-        log.error(f"Downloaded file {tmp_path} does not match provided hash. Expected {expected_hash}, got {actual_hash}")
-        return False
+    # Ensure the hash of the downloaded file matches the expected hash, if specified
+    if not ignore_hash:
+        update_bytes = bytes(open(tmp_path, 'rb').read())
+        actual_hash = hashlib.blake2s(update_bytes).hexdigest()
+        if actual_hash != expected_hash:
+            os.remove(path=tmp_path)
+            log.error(f"Downloaded file {tmp_path} does not match provided hash. Expected {expected_hash}, got {actual_hash}")
+            return False
 
     # Move the downloaded file into place, overwriting anything that's there
     try:
@@ -920,15 +922,17 @@ def main():
                             if custom_hashes[new_hash]:
                                 # Use a custom file path as triggered by the new hash
                                 tmp_path = custom_hashes[new_hash]
+                                ignore_hash = True
                                 log.info(f"Using custom file for update: {tmp_path} -> {install_path}")
                             else:
                                 # Download file to temporary location
+                                ignore_hash = False
                                 download(remote_path, tmp_path,
                                          s3_bin_bucket_name, s3_bucket_region,
                                          s3_access_key_id, s3_access_key_secret)
 
                             # Perform the update
-                            if update(update_target, tmp_path, install_path, new_hash):
+                            if update(update_target, tmp_path, install_path, new_hash, ignore_hash):
                                 current_hashes[update_target] = new_hash
 
                     try:
@@ -955,9 +959,11 @@ def main():
                             if custom_hashes[new_hash]:
                                 # Use a custom file path as triggered by the new hash
                                 tmp_path = custom_hashes[new_hash]
+                                ignore_hash = True
                                 log.info(f"Using custom file for update: {tmp_path} -> {install_path}")
                             else:
                                 # Download file to temporary location
+                                ignore_hash = False
                                 download(remote_path, tmp_path,
                                          s3_bin_bucket_name, s3_bucket_region,
                                          s3_access_key_id, s3_access_key_secret)
@@ -965,7 +971,7 @@ def main():
                             # Stop the process
                             terminate_process(process)
                             # Perform the update
-                            if update(Targets.BINARY, tmp_path, install_path, new_hash):
+                            if update(Targets.BINARY, tmp_path, install_path, new_hash, ignore_hash):
                                 current_hashes[management_directory] = new_hash
                                 # Restart the process
                                 process = start_binary(valid_paths[Targets.BINARY], log_path,
@@ -1103,7 +1109,7 @@ def main():
                                  s3_access_key_id, s3_access_key_secret)
 
                         # Perform the update
-                        was_successful = update(target, tmp_path, install_path, info.get("hash", ""))
+                        was_successful = update(target, tmp_path, install_path, info.get("hash", ""), False)
                         if not was_successful:
                             timestamps[i] = timestamp
                             continue
