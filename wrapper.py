@@ -828,6 +828,8 @@ def main():
     substrate = None
     # Keep track of current binary hashes for blockchain updates
     current_hashes = dict()
+    # Keep track of custom binary hashes that trigger for blockchain updates
+    custom_hashes = dict()
 
     if disable_consensus:
         # Record the most recent command timestamp to avoid executing duplicate commands
@@ -887,14 +889,14 @@ def main():
                 # Handle lost connections
                 substrate = get_substrate_provider(consensus_url)
             else:
-                if not hash_path:
-                    # Automatically poll substrate for hashes
-                    hashes = poll_cmix_hashes(substrate)
-                else:
+                if hash_path:
                     # Manually obtain hashes from file
                     with open(hash_path, "r") as hash_file:
                         hash_file_str = hash_file.readline().strip()
-                        hashes = json.loads(hash_file_str)
+                        custom_hashes = json.loads(hash_file_str)
+
+                # Automatically poll substrate for hashes
+                hashes = poll_cmix_hashes(substrate)
                 if not hashes:
                     # No hashes available, currently syncing
                     substrate = None
@@ -909,15 +911,21 @@ def main():
                             update_target, "0000000000000000000000000000000000000000000000000000000000000000")
                         if new_hash != current_hash:
                             log.info(f"{update_target} update required: {current_hash} -> {new_hash}")
-                            # Get local destination path
+                            # Get local destination paths
                             install_path = valid_paths[update_target]
+                            tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             # Get remote source path
                             remote_path = f"{update_target}/{new_hash}"
-                            # Download file to temporary location
-                            tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
-                            download(remote_path, tmp_path,
-                                     s3_bin_bucket_name, s3_bucket_region,
-                                     s3_access_key_id, s3_access_key_secret)
+
+                            if custom_hashes[new_hash]:
+                                # Use a custom file path as triggered by the new hash
+                                tmp_path = custom_hashes[new_hash]
+                            else:
+                                # Download file to temporary location
+                                download(remote_path, tmp_path,
+                                         s3_bin_bucket_name, s3_bucket_region,
+                                         s3_access_key_id, s3_access_key_secret)
+
                             # Perform the update
                             if update(update_target, tmp_path, install_path, new_hash):
                                 current_hashes[update_target] = new_hash
@@ -937,15 +945,21 @@ def main():
                             management_directory, "0000000000000000000000000000000000000000000000000000000000000000")
                         if new_hash != current_hash:
                             log.info(f"{management_directory} update required: {current_hash} -> {new_hash}")
-                            # Get local destination path
+                            # Get local destination paths
                             install_path = valid_paths[Targets.BINARY]
+                            tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             # Get remote source path
                             remote_path = f"{management_directory}/{new_hash}"
-                            # Download file to temporary location
-                            tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
-                            download(remote_path, tmp_path,
-                                     s3_bin_bucket_name, s3_bucket_region,
-                                     s3_access_key_id, s3_access_key_secret)
+
+                            if custom_hashes[new_hash]:
+                                # Use a custom file path as triggered by the new hash
+                                tmp_path = custom_hashes[new_hash]
+                            else:
+                                # Download file to temporary location
+                                download(remote_path, tmp_path,
+                                         s3_bin_bucket_name, s3_bucket_region,
+                                         s3_access_key_id, s3_access_key_secret)
+
                             # Stop the process
                             terminate_process(process)
                             # Perform the update
