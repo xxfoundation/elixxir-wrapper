@@ -920,6 +920,7 @@ def main():
                             if custom_hashes[new_hash]:
                                 # Use a custom file path as triggered by the new hash
                                 tmp_path = custom_hashes[new_hash]
+                                log.info(f"Using custom file for update: {tmp_path} -> {install_path}")
                             else:
                                 # Download file to temporary location
                                 download(remote_path, tmp_path,
@@ -954,6 +955,7 @@ def main():
                             if custom_hashes[new_hash]:
                                 # Use a custom file path as triggered by the new hash
                                 tmp_path = custom_hashes[new_hash]
+                                log.info(f"Using custom file for update: {tmp_path} -> {install_path}")
                             else:
                                 # Download file to temporary location
                                 download(remote_path, tmp_path,
