@@ -895,12 +895,9 @@ def main():
                     with open(hash_path, "r") as hash_file:
                         hash_file_str = hash_file.readline().strip()
                         hashes = json.loads(hash_file_str)
-
-                if hashes is None:
-                    # Connection was lost
-                    substrate = None
-                elif not hashes:
+                if not hashes:
                     # No hashes available, currently syncing
+                    substrate = None
                     log.debug("Waiting for blockchain node to sync...")
                 else:
                     def update_item(update_target):
