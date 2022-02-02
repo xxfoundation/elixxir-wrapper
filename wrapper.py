@@ -916,8 +916,6 @@ def main():
                             # Get local destination paths
                             install_path = valid_paths[update_target]
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
-                            # Get remote source path
-                            remote_path = f"{update_target}/{new_hash}"
 
                             if new_hash in custom_hashes:
                                 # Use a custom file path as triggered by the new hash
@@ -925,11 +923,13 @@ def main():
                                 ignore_hash = True
                                 log.info(f"Using custom file for update: {tmp_path} -> {install_path}")
                             else:
+                                # Get remote source path
+                                remote_path = f"{update_target}/{new_hash}"
                                 # Download file to temporary location
-                                ignore_hash = False
                                 download(remote_path, tmp_path,
                                          s3_bin_bucket_name, s3_bucket_region,
                                          s3_access_key_id, s3_access_key_secret)
+                                ignore_hash = False
 
                             # Perform the update
                             if update(update_target, tmp_path, install_path, new_hash, ignore_hash):
@@ -953,8 +953,6 @@ def main():
                             # Get local destination paths
                             install_path = valid_paths[Targets.BINARY]
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
-                            # Get remote source path
-                            remote_path = f"{management_directory}/{new_hash}"
 
                             if custom_hashes[new_hash]:
                                 # Use a custom file path as triggered by the new hash
@@ -962,11 +960,13 @@ def main():
                                 ignore_hash = True
                                 log.info(f"Using custom file for update: {tmp_path} -> {install_path}")
                             else:
+                                # Get remote source path
+                                remote_path = f"{management_directory}/{new_hash}"
                                 # Download file to temporary location
-                                ignore_hash = False
                                 download(remote_path, tmp_path,
                                          s3_bin_bucket_name, s3_bucket_region,
                                          s3_access_key_id, s3_access_key_secret)
+                                ignore_hash = False
 
                             # Stop the process
                             terminate_process(process)
