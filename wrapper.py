@@ -919,7 +919,7 @@ def main():
                             # Get remote source path
                             remote_path = f"{update_target}/{new_hash}"
 
-                            if new_hash in custom_hashes::
+                            if new_hash in custom_hashes:
                                 # Use a custom file path as triggered by the new hash
                                 tmp_path = custom_hashes[new_hash]
                                 ignore_hash = True
