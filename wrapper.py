@@ -454,7 +454,7 @@ def download(src_path, dst_path, s3_bucket, region,
         log.error(f"Unable to download {src_path} from {s3_bucket}: {error}", exc_info=True)
 
 
-def update(target, tmp_path, install_path, expected_hash, ignore_hash):
+def update(target, tmp_path, install_path, expected_hash, current_hash="", ignore_hash=False):
     """
     Update the current file with a staged file, assuming hashes match
 
@@ -462,14 +462,14 @@ def update(target, tmp_path, install_path, expected_hash, ignore_hash):
     :param tmp_path: Staged update file
     :param install_path: Path to update the staged file over
     :param expected_hash: Hash that is expected to match the staged file
+    :param current_hash: Hash stored for the current file
     :param ignore_hash: Determines whether the hash should be verified
     :return: True if update successful, else false
     """
     # Ensure the hash of the downloaded file matches the expected hash, if specified
-    if not ignore_hash:
-        update_bytes = bytes(open(tmp_path, 'rb').read())
-        actual_hash = hashlib.blake2s(update_bytes).hexdigest()
-        if actual_hash != expected_hash:
+    update_bytes = bytes(open(tmp_path, 'rb').read())
+    actual_hash = hashlib.blake2s(update_bytes).hexdigest()
+    if not ignore_hash and actual_hash != expected_hash:
             os.remove(path=tmp_path)
             log.error(f"Downloaded file {tmp_path} does not match provided hash. Expected {expected_hash}, got {actual_hash}")
             return False
@@ -484,14 +484,14 @@ def update(target, tmp_path, install_path, expected_hash, ignore_hash):
 
     # Handle binary updates
     if target == Targets.BINARY:
-        os.chmod(install_path, stat.S_IEXEC)
+        os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
 
     # Handle GPU library updates
     if target == Targets.GPULIB or target == Targets.GPUBIN:
         os.chmod(install_path, stat.S_IREAD)
 
-    # Handle wrapper updates
-    if target == Targets.WRAPPER:
+    # Handle wrapper updates, while preventing redundant restarts
+    if target == Targets.WRAPPER and current_hash != actual_hash:
         os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
         log.info("Wrapper script updated, exiting now...")
         os._exit(0)
@@ -893,9 +893,12 @@ def main():
             else:
                 if hash_path:
                     # Manually obtain hashes from file
-                    with open(hash_path, "r") as hash_file:
-                        hash_file_str = hash_file.readline().strip()
-                        custom_hashes = json.loads(hash_file_str)
+                    try:
+                        with open(hash_path, "r") as hash_file:
+                            hash_file_str = hash_file.readline().strip()
+                            custom_hashes = json.loads(hash_file_str)
+                    except Exception as e:
+                        log.error(f"Unable to read custom hashes file: {e}")
 
                 # Automatically poll substrate for hashes
                 hashes = poll_cmix_hashes(substrate)
@@ -932,7 +935,7 @@ def main():
                                 ignore_hash = False
 
                             # Perform the update
-                            if update(update_target, tmp_path, install_path, new_hash, ignore_hash):
+                            if update(update_target, tmp_path, install_path, new_hash, current_hash, ignore_hash):
                                 current_hashes[update_target] = new_hash
 
                     try:
@@ -971,7 +974,7 @@ def main():
                             # Stop the process
                             terminate_process(process)
                             # Perform the update
-                            if update(Targets.BINARY, tmp_path, install_path, new_hash, ignore_hash):
+                            if update(Targets.BINARY, tmp_path, install_path, new_hash, current_hash, ignore_hash):
                                 current_hashes[management_directory] = new_hash
                                 # Restart the process
                                 process = start_binary(valid_paths[Targets.BINARY], log_path,
@@ -1109,7 +1112,7 @@ def main():
                                  s3_access_key_id, s3_access_key_secret)
 
                         # Perform the update
-                        was_successful = update(target, tmp_path, install_path, info.get("hash", ""), False)
+                        was_successful = update(target, tmp_path, install_path, info.get("hash", ""))
                         if not was_successful:
                             timestamps[i] = timestamp
                             continue
