@@ -695,7 +695,7 @@ def get_args():
                         default=False)
     parser.add_argument("--disable-cloudwatch", action="store_true", required=False,
                         help="Disable uploading log events to CloudWatch",
-                        default=False)
+                        default=True)
     parser.add_argument("--management-cert", type=str, required=False,
                         help="Path of the management certificate file",
                         default="/opt/xxnetwork/cred/network-management.crt")
