@@ -70,10 +70,10 @@ subjectAltName=DNS:%s
     subj = "/C=%s/ST=%s/L=%s/O=%s/OU=%s/CN=%s/emailAddress=%s" % \
            (country, state, locality, organization, organizational_unit, domain, email)
 
-    node_gen_command = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "730",
+    node_gen_command = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "3650",
             "-nodes", "-keyout", node_key, "-out", node_cert,
             "-subj", subj, "-extensions", "san", "-config", "cert.conf"]
-    gw_gen_command = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "730",
+    gw_gen_command = ["openssl", "req", "-new", "-newkey", "rsa:4096", "-x509", "-sha256", "-days", "3650",
             "-nodes", "-keyout", gw_key, "-out", gw_cert,
             "-subj", subj, "-extensions", "san", "-config", "cert.conf"]
     subprocess.run(node_gen_command)
