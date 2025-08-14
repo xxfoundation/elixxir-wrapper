@@ -28,6 +28,10 @@ import shutil
 from OpenSSL import crypto
 from substrateinterface import SubstrateInterface
 import hashlib
+import urllib.request
+import urllib.error
+import email.utils
+import datetime
 
 ########################################################################################################################
 # Blockchain Updates
@@ -436,10 +440,14 @@ def check_networking():
 
 
 def download(src_path, dst_path, s3_bucket, region,
-             access_key_id, access_key_secret):
+             access_key_id, access_key_secret, expected_hash=None):
     """
-    Downloads file at src_path on s3_bucket to dst_path using
-    the provided access_key_id and access_key_secret.
+    Downloads file at src_path on s3_bucket to dst_path using the provided
+    access_key_id and access_key_secret. If expected_hash is provided, first
+    attempt HTTP download(s) from configured download URL bases using the
+    pattern: {base}/{expected_hash}_{basename(dst_path)}. If no hash is provided,
+    attempt HTTP download(s) using: {base}/{src_path}. If all HTTP attempts fail,
+    fall back to S3 download.
 
     :param src_path: Path of file on S3 bucket
     :type src_path: str
@@ -453,9 +461,32 @@ def download(src_path, dst_path, s3_bucket, region,
     :type access_key_id: str
     :param access_key_secret: Access key secret for bucket access
     :type access_key_secret: str
+    :param expected_hash: Optional hash used to construct HTTP filenames
+    :type expected_hash: str | None
     :return: None
     :rtype: None
     """
+    # Try HTTP download(s) first if download bases are configured
+    bases = globals().get('DOWNLOAD_URL_BASES', [])
+    tmp_cache_dir = globals().get('TMP_DIR_FOR_HTTP', '/tmp')
+
+    filename = os.path.basename(dst_path)
+    download_filename = filename
+    if expected_hash:
+        download_filename = f"{expected_hash}_{filename}"
+
+    os.makedirs(os.path.dirname(dst_path) or '/', exist_ok=True)
+    for base in bases:
+        try:
+            base = base.rstrip('/') + '/' # ensure it ends with a /
+            url = f"{base}{expected_hash}_{download_filename}"
+            http_download(url, dst_path, tmp_cache_dir)
+            log.debug(f"Successfully HTTP downloaded to {dst_path} from {url}")
+            return
+        except Exception as e:
+            log.warning(f"HTTP download failed for url={url} tmp_target={dst_path}: {e}")
+
+    # Fall back to S3
     try:
         s3 = boto3.Session(
             aws_access_key_id=access_key_id,
@@ -468,6 +499,100 @@ def download(src_path, dst_path, s3_bucket, region,
     except Exception as error:
         log.error("Unable to download {} from {}: {}".format(src_path, s3_bucket, error),
                   exc_info=True)
+
+
+# In-memory cache for HTTP Last-Modified timestamps, keyed by URL
+_http_last_modified_cache = {}
+
+
+def _parse_http_httpdate(date_str):
+    """
+    Parse an HTTP date string (e.g., Last-Modified) into a timezone-aware UTC datetime.
+    Returns None if parsing fails.
+    """
+    try:
+        if not date_str:
+            return None
+        dt = email.utils.parsedate_to_datetime(date_str)
+        # Ensure timezone-aware in UTC
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=datetime.timezone.utc)
+        return dt.astimezone(datetime.timezone.utc)
+    except Exception:
+        return None
+
+
+def http_download(url, dst_path, tmp_dir, timeout=30):
+    """
+    Download a file over HTTP(S) using Last-Modified for cache validation.
+    - Always keep a cached copy in tmp_dir under a unique path derived from the URL path.
+    - If the server's Last-Modified is available and not newer than our cached value,
+      copy the cached file to dst_path and return immediately.
+    - If Last-Modified is missing or newer, download to the cached path, update the cache,
+      then copy the cached file to dst_path.
+
+    :param url: The HTTP(S) URL to download
+    :param dst_path: Full local filesystem path to write the file to
+    :param tmp_dir: Base temp directory to store the cached copy (preserving URL path)
+    :param timeout: Request timeout in seconds (default 30)
+    :return: The dst_path the file was written to
+    :raises URLError/HTTPError/OSError: on network or file I/O errors
+    """
+    # Try HEAD to fetch Last-Modified
+    last_modified = None
+    try:
+        head_req = urllib.request.Request(url, method='HEAD')
+        with urllib.request.urlopen(head_req, timeout=timeout) as head_resp:
+            lm = head_resp.headers.get('Last-Modified')
+            last_modified = _parse_http_httpdate(lm)
+    except urllib.error.HTTPError as e:
+        # Some servers don't allow HEAD; fall back to GET for the actual download
+        if e.code not in (405, 501):
+            raise
+        else:
+            log.warning(f"HEAD not allowed for {url}, falling back to GET for Last-Modified")
+    except urllib.error.URLError:
+        raise
+
+    # Compute a unique cached path under tmp_dir using the URL path
+    from urllib.parse import urlparse
+    import posixpath
+    parsed = urlparse(url)
+    rel_path = posixpath.normpath(parsed.path or '/')
+    if rel_path.startswith('/'):
+        rel_path = rel_path[1:]
+    if rel_path in ('', '.', '/'):
+        rel_path = 'index'
+    # Prevent traversal by replacing any '..' segments
+    rel_path = rel_path.replace('..', '_')
+    cached_path = os.path.join(tmp_dir, rel_path)
+
+    cached_lm = _http_last_modified_cache.get(url)
+    if last_modified is not None and cached_lm is not None and last_modified <= cached_lm and os.path.isfile(cached_path):
+        # Not new: copy from cache and return
+        os.makedirs(os.path.dirname(dst_path) or '/', exist_ok=True)
+        shutil.copyfile(cached_path, dst_path)
+        log.debug(f"Copied cached {url} -> {dst_path}")
+        return dst_path
+
+    # Download or refresh the cache
+    with urllib.request.urlopen(url, timeout=timeout) as resp:
+        os.makedirs(os.path.dirname(cached_path) or '/', exist_ok=True)
+        with open(cached_path, 'wb') as out:
+            shutil.copyfileobj(resp, out)
+        # Prefer Last-Modified from the GET response if available
+        lm_get = resp.headers.get('Last-Modified')
+        parsed_get_lm = _parse_http_httpdate(lm_get)
+        if parsed_get_lm is not None:
+            _http_last_modified_cache[url] = parsed_get_lm
+        elif last_modified is not None:
+            _http_last_modified_cache[url] = last_modified
+
+    # Write/overwrite the destination path with the cached copy
+    os.makedirs(os.path.dirname(dst_path) or '/', exist_ok=True)
+    shutil.copyfile(cached_path, dst_path)
+    log.debug(f"Downloaded {url} to cache {cached_path} and copied to {dst_path}")
+    return dst_path
 
 
 def update(target, tmp_path, install_path, expected_hash):
@@ -816,6 +941,14 @@ def main():
     config_file = args["config_path"]
     disable_consensus = args["disable_consensus"]
     disable_cloudwatch = args["disable_cloudwatch"]
+    download_urls = [ 'https://xx.carback.us/', 'https://binaries.xx.network' ]
+    if args.get("download_urls"):
+        download_urls = args["download_urls"]
+
+    # Expose download URL bases and tmp cache dir to download()/http_download
+    global DOWNLOAD_URL_BASES, TMP_DIR_FOR_HTTP
+    DOWNLOAD_URL_BASES = download_urls
+    TMP_DIR_FOR_HTTP = tmp_dir
 
     # The valid "install" paths we can write to, with their local paths for
     # this machine
@@ -927,7 +1060,7 @@ def main():
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
                                      s3_bin_bucket_name, s3_bucket_region,
-                                     s3_access_key_id, s3_access_key_secret)
+                                     s3_access_key_id, s3_access_key_secret, new_hash)
                             # Perform the update
                             was_successful = update(Targets.WRAPPER, tmp_path, install_path, new_hash)
                             if was_successful:
@@ -948,7 +1081,7 @@ def main():
                                 tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                                 download(remote_path, tmp_path,
                                          s3_bin_bucket_name, s3_bucket_region,
-                                         s3_access_key_id, s3_access_key_secret)
+                                         s3_access_key_id, s3_access_key_secret, new_hash)
                                 # Perform the update
                                 was_successful = update(Targets.GPUBIN, tmp_path, install_path, new_hash)
                                 if was_successful:
@@ -968,7 +1101,7 @@ def main():
                                 tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                                 download(remote_path, tmp_path,
                                          s3_bin_bucket_name, s3_bucket_region,
-                                         s3_access_key_id, s3_access_key_secret)
+                                         s3_access_key_id, s3_access_key_secret, new_hash)
                                 # Perform the update
                                 was_successful = update(Targets.GPULIB, tmp_path, install_path, new_hash)
                                 if was_successful:
@@ -991,7 +1124,7 @@ def main():
                             tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                             download(remote_path, tmp_path,
                                      s3_bin_bucket_name, s3_bucket_region,
-                                     s3_access_key_id, s3_access_key_secret)
+                                     s3_access_key_id, s3_access_key_secret, new_hash)
                             # Perform the update
                             was_successful = update(Targets.BINARY, tmp_path, install_path, new_hash)
                             if was_successful:
@@ -1140,7 +1273,7 @@ def main():
                         tmp_path = os.path.join(tmp_dir, os.path.basename(install_path) + ".tmp")
                         download(remote_path, tmp_path,
                                  s3_management_bucket_name, s3_bucket_region,
-                                 s3_access_key_id, s3_access_key_secret)
+                                 s3_access_key_id, s3_access_key_secret, info.get("hash", None))
 
                         # Perform the update
                         was_successful = update(target, tmp_path, install_path, info.get("hash", ""))
