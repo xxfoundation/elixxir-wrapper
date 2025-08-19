@@ -639,6 +639,25 @@ def update(target, tmp_path, install_path, expected_hash):
     # Return successfully
     return True
 
+def get_binary_hash(bin_path: str) -> str:
+    """
+    Compute BLAKE2s hex digest of a file at path, streaming in chunks.
+
+    :param bin_path: Path to the binary
+    :type bin_path: str
+    :return: The hex digest of the binary
+    :rtype: str
+    """
+    if not os.path.exists(bin_path):
+        log.warning(f"Binary not found at {bin_path}, cannot compute hash")
+        return "0000000000000000000000000000000000000000000000000000000000000000"
+    try:
+        file_bytes = bytes(open(bin_path, 'rb').read())
+        return hashlib.blake2s(file_bytes).hexdigest()
+    except Exception as err:
+        log.error(f"Could not compute hash for {bin_path}: {err}")
+        return "0000000000000000000000000000000000000000000000000000000000000000"
+
 
 def start_binary(bin_path, log_file_path, bin_args):
     """
@@ -1047,12 +1066,10 @@ def main():
                     try:
                         # Check for wrapper updates
                         new_hash = hashes[Targets.WRAPPER].replace("0x", "")
-                        current_hash = current_hashes.get(
-                            Targets.WRAPPER, "0000000000000000000000000000000000000000000000000000000000000000")
+                        install_path = valid_paths[Targets.WRAPPER]
+                        current_hash = current_hashes.get(Targets.WRAPPER, get_binary_hash(install_path))
                         if new_hash != current_hash:
                             log.info("{} update required: {} -> {}".format(Targets.WRAPPER, current_hash, new_hash))
-                            # Get local destination path
-                            install_path = valid_paths[Targets.WRAPPER]
                             # Get remote source path
                             remote_path = "{}/{}".format(Targets.WRAPPER, new_hash)
                             # Download file to temporary location
@@ -1068,12 +1085,10 @@ def main():
                         if not is_gateway:
                             # Check for GPU bin updates
                             new_hash = hashes[Targets.GPUBIN].replace("0x", "")
-                            current_hash = current_hashes.get(
-                                Targets.GPUBIN, "0000000000000000000000000000000000000000000000000000000000000000")
+                            install_path = valid_paths[Targets.GPUBIN]
+                            current_hash = current_hashes.get(Targets.GPUBIN, get_binary_hash(install_path))
                             if new_hash != current_hash:
                                 log.info("{} update required: {} -> {}".format(Targets.GPUBIN, current_hash, new_hash))
-                                # Get local destination path
-                                install_path = valid_paths[Targets.GPUBIN]
                                 # Get remote source path
                                 remote_path = "{}/{}".format(Targets.GPUBIN, new_hash)
                                 # Download file to temporary location
@@ -1088,12 +1103,10 @@ def main():
 
                             # Check for GPU lib updates
                             new_hash = hashes[Targets.GPULIB].replace("0x", "")
-                            current_hash = current_hashes.get(
-                                Targets.GPULIB, "0000000000000000000000000000000000000000000000000000000000000000")
+                            install_path = valid_paths[Targets.GPULIB]
+                            current_hash = current_hashes.get(Targets.GPULIB, get_binary_hash(install_path))
                             if new_hash != current_hash:
                                 log.info("{} update required: {} -> {}".format(Targets.GPULIB, current_hash, new_hash))
-                                # Get local destination path
-                                install_path = valid_paths[Targets.GPULIB]
                                 # Get remote source path
                                 remote_path = "{}/{}".format(Targets.GPULIB, new_hash)
                                 # Download file to temporary location
@@ -1108,15 +1121,13 @@ def main():
 
                         # Check for binary updates
                         new_hash = hashes[management_directory].replace("0x", "")
-                        current_hash = current_hashes.get(
-                            management_directory, "0000000000000000000000000000000000000000000000000000000000000000")
+                        install_path = valid_paths[Targets.BINARY]
+                        current_hash = current_hashes.get(management_directory, get_binary_hash(install_path))
                         if new_hash != current_hash:
                             log.info(
                                 "{} update required: {} -> {}".format(management_directory, current_hash, new_hash))
                             # Stop the process
                             terminate_process(process)
-                            # Get local destination path
-                            install_path = valid_paths[Targets.BINARY]
                             # Get remote source path
                             remote_path = "{}/{}".format(management_directory, new_hash)
                             # Download file to temporary location
