@@ -468,7 +468,7 @@ def download(src_path, dst_path, s3_bucket, region,
     """
     # Try HTTP download(s) first if download bases are configured
     bases = globals().get('DOWNLOAD_URL_BASES', [])
-    tmp_cache_dir = globals().get('TMP_DIR_FOR_HTTP', '/tmp')
+    tmp_cache_dir = globals().get('TMP_DIR_FOR_HTTP', '/tmp/.xx_http_downloads')
 
     filename = os.path.basename(dst_path)
 
@@ -564,6 +564,7 @@ def http_download(url, dst_path, tmp_dir, timeout=30):
         rel_path = 'index'
     # Prevent traversal by replacing any '..' segments
     rel_path = rel_path.replace('..', '_')
+    os.makedirs(tmp_dir, exist_ok=True)
     cached_path = os.path.join(tmp_dir, rel_path)
 
     cached_lm = _http_last_modified_cache.get(url)
@@ -966,7 +967,7 @@ def main():
     # Expose download URL bases and tmp cache dir to download()/http_download
     global DOWNLOAD_URL_BASES, TMP_DIR_FOR_HTTP
     DOWNLOAD_URL_BASES = download_urls
-    TMP_DIR_FOR_HTTP = tmp_dir
+    TMP_DIR_FOR_HTTP = os.path.join(tmp_dir, ".xx_http_downloads")
 
     # The valid "install" paths we can write to, with their local paths for
     # this machine
