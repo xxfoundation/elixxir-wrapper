@@ -625,7 +625,7 @@ def update(target, tmp_path, install_path, expected_hash):
 
     # Handle binary updates
     if target == Targets.BINARY:
-        os.chmod(install_path, stat.S_IEXEC)
+        os.chmod(install_path, stat.S_IEXEC | stat.S_IREAD)
 
     # Handle GPU library updates
     if target == Targets.GPULIB or target == Targets.GPUBIN:
