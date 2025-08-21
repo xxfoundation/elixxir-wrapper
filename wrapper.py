@@ -1142,6 +1142,7 @@ def main():
                             was_successful = update(Targets.BINARY, tmp_path, install_path, new_hash)
                         if first_run or was_successful:
                             current_hashes[management_directory] = new_hash
+                            first_run = False
                             # Restart the process
                             process = start_binary(valid_paths[Targets.BINARY], log_path,
                                                     ["--config", config_file])
