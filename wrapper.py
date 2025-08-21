@@ -1046,6 +1046,7 @@ def main():
 
     # Main command/control loop
     log.info("Script initialized at {}".format(time.time()))
+    first_run = True
     while True:
         time.sleep(command_frequency)
 
@@ -1124,6 +1125,7 @@ def main():
                         new_hash = hashes[management_directory].replace("0x", "")
                         install_path = valid_paths[Targets.BINARY]
                         current_hash = current_hashes.get(management_directory, get_binary_hash(install_path))
+                        was_successful = False
                         if new_hash != current_hash:
                             log.info(
                                 "{} update required: {} -> {}".format(management_directory, current_hash, new_hash))
@@ -1138,11 +1140,11 @@ def main():
                                      s3_access_key_id, s3_access_key_secret, new_hash)
                             # Perform the update
                             was_successful = update(Targets.BINARY, tmp_path, install_path, new_hash)
-                            if was_successful:
-                                current_hashes[management_directory] = new_hash
-                                # Restart the process
-                                process = start_binary(valid_paths[Targets.BINARY], log_path,
-                                                       ["--config", config_file])
+                        if first_run or was_successful:
+                            current_hashes[management_directory] = new_hash
+                            # Restart the process
+                            process = start_binary(valid_paths[Targets.BINARY], log_path,
+                                                    ["--config", config_file])
                     except Exception as err:
                         log.error("Unable to execute blockchain update: {}".format(err),
                                   exc_info=True)
