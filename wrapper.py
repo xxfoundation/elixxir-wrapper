@@ -470,16 +470,15 @@ def download(src_path, dst_path, s3_bucket, region,
     bases = globals().get('DOWNLOAD_URL_BASES', [])
     tmp_cache_dir = globals().get('TMP_DIR_FOR_HTTP', '/tmp/.xx_http_downloads')
 
-    lastdir = os.path.basename(os.path.dirname(dst_path))
     filename = os.path.basename(dst_path)
 
     os.makedirs(os.path.dirname(dst_path) or '/', exist_ok=True)
     for base in bases:
         try:
-            base = base.rstrip('/')
-            url = f"{base}/{lastdir}/{expected_hash}"
+            base = base.rstrip('/') + '/' # ensure it ends with a /
+            url = f"{base}{expected_hash}"
             if expected_hash is None:
-                url = f"{base}/{lastdir}/{filename}"
+                url = f"{base}{filename}"
             http_download(url, dst_path, tmp_cache_dir)
             log.debug(f"Successfully HTTP downloaded to {dst_path} from {url}")
             return
